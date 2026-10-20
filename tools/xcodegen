@@ -1,0 +1,38 @@
+#!/bin/bash
+# Runs the XcodeGen pinned in .xcodegen-version ("<version>@<commit>"), passing its arguments on.
+#
+# The first run clones that tag, checks it is still at the pinned commit (a moved tag is refused,
+# never built), and builds it into ~/Library/Caches/apple-xcodebuild/xcodegen/<version>-<commit12>/
+# — the cache the apple-xcodebuild skill uses, so `make` and the skill share one build.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+pin=$(tr -d '[:space:]' < .xcodegen-version)
+ver=${pin%@*}
+want=${pin#*@}
+if [[ $pin != *@* || ! $want =~ ^[0-9a-f]{40}$ ]]; then
+  echo "tools/xcodegen: .xcodegen-version must be <version>@<40-hex commit>, not '$pin'" >&2
+  exit 1
+fi
+
+base="$HOME/Library/Caches/apple-xcodebuild/xcodegen/$ver-${want:0:12}"
+bin="$base/bin/xcodegen"
+if [ ! -x "$bin" ]; then
+  echo ">> building XcodeGen $ver (${want:0:12}) into $base — once, about a minute" >&2
+  rm -rf "$base"
+  mkdir -p "$base/bin"
+  git clone -q --depth 1 --branch "$ver" https://github.com/yonaskolb/XcodeGen.git "$base/src" >&2
+  got=$(git -C "$base/src" rev-parse HEAD)
+  if [ "$got" != "$want" ]; then
+    rm -rf "$base"
+    echo "tools/xcodegen: tag $ver is at $got, expected $want — refusing to build it" >&2
+    exit 1
+  fi
+  swift build -c release --package-path "$base/src" >&2
+  real="$(swift build -c release --package-path "$base/src" --show-bin-path)/xcodegen"
+  # A wrapper, not a copy or symlink: xcodegen finds its resource bundle next to the real binary.
+  printf '#!/bin/sh\nexec "%s" "$@"\n' "$real" > "$bin.tmp"
+  chmod +x "$bin.tmp"
+  mv "$bin.tmp" "$bin"
+fi
+exec "$bin" "$@"

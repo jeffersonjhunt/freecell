@@ -1,0 +1,65 @@
+{
+  "_comment": "The App Store listing for both platforms (approved 2026-10-03). tools/asc.py listing applies it.",
+  "version": "1.1",
+  "build": "202610040130",
+  "copyright": "2026 One Off Endeavors",
+  "contentRightsDeclaration": "DOES_NOT_USE_THIRD_PARTY_CONTENT",
+  "subtitle": "Classic Klondike, no ads",
+  "privacyPolicyUrl": "https://oneoffendeavors.com/solitaire/privacy/",
+  "supportUrl": "https://oneoffendeavors.com/solitaire/support/",
+  "marketingUrl": "https://oneoffendeavors.com/solitaire/",
+  "primarySubcategory": "GAMES_CARD",
+  "keywords": "klondike,patience,card game,cards,draw 3,offline,no ads,classic,leaderboard,hard core,relaxing",
+  "promotionalText": "Klondike as it should be: big, readable cards, tap or drag, and nothing in the way. No ads, no accounts, no tracking.",
+  "description": [
+    "One Off Solitaire is classic Klondike for iPhone, iPad and Mac: big cards, quick play, and nothing else on the screen.",
+    "",
+    "PLAY YOUR WAY",
+    "• Draw 1 or Draw 3, switched with one tap",
+    "• Tap a card to send it to its best spot, or drag it exactly where you want",
+    "• Undo your moves, and let Finish play out a game that's solved",
+    "• Hard Core: one pass through the deck in Draw 1, three in Draw 3",
+    "• Restart: play the same deal again from the start (turn it on in Settings)",
+    "",
+    "SCORE EVERY GAME",
+    "• Points for every card you bring home and every suit you finish, plus a time bonus when you win",
+    "• Your Top 10 for each draw mode, synced across your devices with iCloud",
+    "• Game Center leaderboards for normal and Hard Core games",
+    "",
+    "MAKE IT YOURS",
+    "• Four card faces (Classic, Big Index, Vintage and Night) and four card backs",
+    "• Win animations: Cascade, Rainfall, Decay, Shuffle, Random or None",
+    "• The draw pile on the left or the right",
+    "",
+    "LEFT ALONE TO PLAY",
+    "• No ads, no in-app purchases, no accounts, no tracking",
+    "• Your game is saved as you play and picks up where you left off",
+    "• Plays offline",
+    "• VoiceOver, Voice Control, larger text and Reduce Motion supported",
+    "",
+    "Made by One Off Endeavors."
+  ],
+  "screenshots": {
+    "IOS": {
+      "APP_IPHONE_67": [
+        "iphone-1-board.png",
+        "iphone-2-win.png",
+        "iphone-3-rainfall.png",
+        "iphone-4-settings.png"
+      ],
+      "APP_IPAD_PRO_3GEN_129": [
+        "ipad-1-board.png",
+        "ipad-2-win.png",
+        "ipad-3-rainfall.png",
+        "ipad-4-settings.png"
+      ]
+    },
+    "MAC_OS": {
+      "APP_DESKTOP": [
+        "mac-1-board.png",
+        "mac-2-win.png",
+        "mac-3-rainfall.png"
+      ]
+    }
+  }
+}
