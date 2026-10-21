@@ -2,48 +2,95 @@ import Testing
 import FreeCellEngine
 @testable import FreeCell
 
-/// A store dealing a fixed sequence of seeds, so every test is reproducible.
+/// A store dealing a fixed sequence of game numbers, so every test is reproducible. Automatic plays
+/// settle at once (no 90 ms steps) unless a test asks for them animated.
 @MainActor
-func makeStore(drawCount: Int = 1, seeds: [UInt64] = [42, 43, 44, 45]) -> GameStore {
-    var remaining = seeds
-    return GameStore(drawCount: drawCount) { remaining.isEmpty ? 0 : remaining.removeFirst() }
+func makeStore(hardCore: Bool = false, numbers: [Int] = [617, 618, 619, 620], animated: Bool = false) -> GameStore {
+    var remaining = numbers
+    let store = GameStore(hardCore: hardCore) { remaining.isEmpty ? 1 : remaining.removeFirst() }
+    store.animatesAutomaticPlays = animated
+    return store
 }
 
-/// Every move the rules allow (excluding the stock tap).
+/// A store resumed at a hand-built position.
+@MainActor
+func makeStore(at state: GameState, animated: Bool = false) -> GameStore {
+    let store = makeStore(animated: animated)
+    store.resume(from: state)
+    return store
+}
+
+/// A position for store tests; unspecified piles are empty, the other cards nowhere (the store
+/// doesn't check that all 52 are present — persistence does).
+func position(columns: [[Card]], cells: [Card?] = [], foundations: [[Card]] = [], hardCore: Bool = false) -> GameState {
+    let count = FreeCellEngine.cellCount(hardCore: hardCore)
+    return GameState(cells: cells + Array(repeating: nil, count: count - cells.count),
+                     foundations: foundations + Array(repeating: [], count: 4 - foundations.count),
+                     tableau: columns + Array(repeating: [], count: 8 - columns.count),
+                     number: 617, isHardCore: hardCore)
+}
+
+/// "AS", "10H" or "TH", "KD" → a card.
+func card(_ code: String) -> Card {
+    let suit: Suit = ["C": .clubs, "D": .diamonds, "H": .hearts, "S": .spades][code.last!]!
+    let rankText = String(code.dropLast())
+    return Card(suit: suit, rank: ["A": 1, "T": 10, "J": 11, "Q": 12, "K": 13][rankText] ?? Int(rankText)!)
+}
+
+func cards(_ codes: String) -> [Card] { codes.split(separator: " ").map { card(String($0)) } }
+
+/// A full suit's foundation, ace to `rank`.
+func foundation(_ suit: Suit, upTo rank: Int) -> [Card] { (1...rank).map { Card(suit: suit, rank: $0) } }
+
+/// The moves a random player picks from: every legal move except into a free cell — unless that is
+/// all there is. (Random play that uses cells freely fills them and gets stuck within a few moves.)
+func randomPlayerMoves(_ s: GameState) -> [Move] {
+    let all = legalMoves(s)
+    let withoutCells = all.filter { if case .cell = $0.destination { false } else { true } }
+    return withoutCells.isEmpty ? all : withoutCells
+}
+
+/// Every move the rules allow.
 func legalMoves(_ s: GameState) -> [Move] {
-    var sources: [(PileID, Int)] = []
-    if !s.waste.isEmpty { sources.append((.waste, s.waste.count - 1)) }
-    for f in 0..<4 where !s.foundations[f].isEmpty { sources.append((.foundation(f), s.foundations[f].count - 1)) }
-    for t in 0..<7 { for i in s.tableau[t].indices { sources.append((.tableau(t), i)) } }
-    let destinations: [PileID] = (0..<4).map { .foundation($0) } + (0..<7).map { .tableau($0) }
+    var sources: [(PileID, Int)] = s.cells.indices.map { (.cell($0), 0) }
+    for t in 0..<8 { for i in s.tableau[t].indices { sources.append((.tableau(t), i)) } }
+    let destinations: [PileID] = s.cells.indices.map { .cell($0) } + (0..<4).map { .foundation($0) }
+        + (0..<8).map { .tableau($0) }
     return sources.flatMap { src, i in destinations.map { Move(source: src, index: i, destination: $0) } }
         .filter { FreeCellEngine.canMove($0, in: s) }
 }
 
+func cardsHome(_ s: GameState) -> Int { s.foundations.reduce(0) { $0 + $1.count } }
+
 @MainActor @Suite struct Undo {
-    /// Acceptance: undo from any point returns the exact previous board, moves and passes, including
-    /// face-up flips and redeals, for 100 random moves from a fixed seed — the undo count rising by
-    /// one each time (spec "Scoring").
+    /// Acceptance: undo from any point returns the exact previous board and move count over 100
+    /// random moves from a fixed game — automatic plays included — the undo count rising by one each
+    /// time.
     @Test func hundredRandomMovesUndoExactly() {
-        let store = makeStore()
+        // Game 5: its aces come free within a random walk (617's sit 4–8 cards deep and never do).
+        let store = makeStore(numbers: [5])
         var rng = SplitMix64(seed: 7)
         var history = [store.state]
-        var flips = 0, redeals = 0
+        var automatic = 0
         while history.count <= 100 {
             let before = store.state
-            let moves = legalMoves(before)
-            if !moves.isEmpty && rng.next() % 3 != 0 {
-                let m = moves[Int(rng.next() % UInt64(moves.count))]
-                #expect(store.drop(source: m.source, index: m.index, on: m.destination))
-                if case .tableau(let t) = m.source, m.index > 0, !before.tableau[t][m.index - 1].isFaceUp { flips += 1 }
-            } else {
-                if before.stock.isEmpty && !before.waste.isEmpty { redeals += 1 }
-                store.tapStock()
-                if store.state == before { continue }        // nothing to draw: not a step
+            let moves = randomPlayerMoves(before)
+            guard !moves.isEmpty else { break }
+            // Half the time, steer toward a move that sets off an automatic play (random moves alone
+            // almost never uncover an ace), so the walk undoes through them too.
+            let setsOff = moves.filter { m in
+                var after = before
+                FreeCellEngine.apply(m, to: &after)
+                return FreeCellEngine.nextSafePlay(in: after) != nil
             }
+            let pool = !setsOff.isEmpty && rng.next() % 2 == 0 ? setsOff : moves
+            let m = pool[Int(rng.next() % UInt64(pool.count))]
+            #expect(store.drop(source: m.source, index: m.index, on: m.destination))
+            let homeByHand = if case .foundation = m.destination { 1 } else { 0 }
+            if cardsHome(store.state) > cardsHome(before) + homeByHand { automatic += 1 }
             history.append(store.state)
         }
-        #expect(flips > 0 && redeals > 0, "the walk must include flips (\(flips)) and redeals (\(redeals))")
+        #expect(history.count == 101 && automatic > 0, "the walk must set off automatic plays (\(automatic))")
         for (n, var expected) in history.dropLast().reversed().enumerated() {
             store.undo()
             expected.undos = n + 1
@@ -52,107 +99,142 @@ func legalMoves(_ s: GameState) -> [Move] {
         #expect(!store.canUndo)
     }
 
-    /// Undo keeps the clock's time and counts itself; the undone move's points go with it.
+    /// One Undo takes back a move and the automatic plays it set off.
+    @Test func aMoveAndItsAutomaticPlaysAreOneUndo() {
+        let start = position(columns: [cards("AS 5H"), cards("6C"), cards("KD")])
+        let store = makeStore(at: start)
+        #expect(store.drop(source: .tableau(0), index: 1, on: .tableau(1)))
+        #expect(store.state.foundations.contains(cards("AS")) && store.state.tableau[0].isEmpty)
+        #expect(store.state.moveCount == 1, "the automatic play costs no move")
+        store.undo()
+        var expected = start
+        expected.undos = 1
+        #expect(store.state == expected)
+    }
+
+    @Test func automaticPlaysCanBeTurnedOff() {
+        let store = makeStore(at: position(columns: [cards("AS 5H"), cards("6C")]))
+        store.playsCardsHome = { false }
+        #expect(store.drop(source: .tableau(0), index: 1, on: .tableau(1)))
+        #expect(store.state.tableau[0] == cards("AS") && store.state.foundations.allSatisfy(\.isEmpty))
+    }
+
+    /// Animated, the automatic plays wait their turn — but a new move never races them: they all
+    /// land first.
+    @Test func aNewMoveSettlesWaitingAutomaticPlaysFirst() {
+        let store = makeStore(at: position(columns: [cards("AS 5H"), cards("6C"), cards("KD 9D")]), animated: true)
+        #expect(store.drop(source: .tableau(0), index: 1, on: .tableau(1)))
+        #expect(store.state.tableau[0] == cards("AS"), "still waiting its 90 ms")
+        #expect(store.tap(pile: .tableau(2), index: 1))                        // 9♦ to a free cell
+        #expect(store.state.foundations.contains(cards("AS")) && store.state.cells[0] == card("9D"))
+    }
+
     @Test func undoKeepsTheClockAndCountsItself() {
-        let store = makeStore()
-        store.tapStock()
+        let store = makeStore(at: position(columns: [cards("KD 5H"), cards("6C")]))
+        #expect(store.drop(source: .tableau(0), index: 1, on: .tableau(1)))
         store.tick(); store.tick()
         let before = store.state
         store.undo()
         #expect(store.state.elapsed == before.elapsed, "time isn't taken back")
-        #expect(store.state.undos == 1 && store.score == 0, "−3 on nothing is still 0")
-        store.tapStock(); store.undo()
-        #expect(store.state.undos == 2, "and every undo counts")
-    }
-
-    /// Undo takes a redeal back, pass count included.
-    @Test func undoTakesARedealBack() {
-        let store = makeStore()
-        while !store.state.stock.isEmpty { store.tapStock() }
-        store.tapStock()                                            // redeal
-        #expect(store.state.redeals == 1)
-        store.undo()
-        #expect(store.state.redeals == 0 && store.state.passes == 1 && store.state.stock.isEmpty)
+        #expect(store.state.undos == 1 && store.state.moveCount == 0)
     }
 
     @Test func undoStackIsCappedAtThreeHundred() {
-        let store = makeStore()
-        for _ in 0..<350 { store.tapStock() }
+        let store = makeStore(at: position(columns: [cards("KH")]))
+        for i in 0..<350 {                                                    // into a cell and back
+            if i % 2 == 0 {
+                #expect(store.drop(source: .tableau(0), index: 0, on: .cell(0)))
+            } else {
+                #expect(store.drop(source: .cell(0), index: 0, on: .tableau(0)))
+            }
+        }
         #expect(store.undoStack.count == GameStore.undoLimit)
         var oldestKept = store.undoStack.first
         for _ in 0..<GameStore.undoLimit { store.undo() }
-        oldestKept?.undos = GameStore.undoLimit                    // every undo is counted (spec "Scoring")
+        oldestKept?.undos = GameStore.undoLimit
         #expect(store.state == oldestKept)
         #expect(!store.canUndo)
     }
 
     @Test func aNewDealClearsUndo() {
         let store = makeStore()
-        store.tapStock()
+        let move = legalMoves(store.state).first!
+        #expect(store.drop(source: move.source, index: move.index, on: move.destination))
         #expect(store.canUndo)
-        store.newGame(drawCount: 3)
-        #expect(!store.canUndo && store.state.drawCount == 3 && store.state.seed == 43)
+        store.newGame()
+        #expect(!store.canUndo && store.state.number == 618 && store.state.moveCount == 0)
     }
 }
 
 @MainActor @Suite struct Winning {
-    /// A won game cannot be un-won: undo is refused (and a second win would lose its sheet).
+    static var nearlyWon: GameState {
+        var s = position(columns: [cards("KC")], foundations: Suit.allCases.map { foundation($0, upTo: 13) })
+        s.foundations[0].removeLast()                                         // the K♣ is in column 1
+        return s
+    }
+
+    /// A won game cannot be un-won: undo is refused.
     @Test func undoDoesNothingOnceWon() {
-        let store = makeStore()
-        var s = store.state
-        s.stock = []; s.waste = []
-        s.foundations = [Suit.spades, .hearts, .diamonds, .clubs].map { suit in
-            (1...13).map { Card(suit: suit, rank: $0, isFaceUp: true) } }
-        let king = s.foundations[3].removeLast()
-        s.tableau = [[king], [], [], [], [], [], []]
-        store.resume(from: s)
+        let store = makeStore(at: Self.nearlyWon)
         #expect(store.tap(pile: .tableau(0), index: 0))
         #expect(store.state.isWon && !store.canUndo)
         let won = store.state
         store.undo()
         #expect(store.state == won)
     }
+
+    /// Automatic plays can finish a game: moving the Q♦ off the K♦ sends the Q♦, K♦ and K♣ home
+    /// by themselves — and the win is reported once.
+    @Test func automaticPlaysCanWinAndTheWinIsReportedOnce() {
+        var s = position(columns: [cards("KC"), cards("KD QD")], foundations: Suit.allCases.map { foundation($0, upTo: 13) })
+        s.foundations[0].removeLast()                                         // K♣ in column 1
+        s.foundations[1].removeLast(2)                                        // Q♦ K♦ in column 2
+        let store = makeStore(at: s)
+        var wins = 0
+        store.onWin = { _ in wins += 1 }
+        #expect(store.drop(source: .tableau(1), index: 1, on: .cell(0)))
+        #expect(store.state.isWon && wins == 1 && store.state.moveCount == 1)
+    }
 }
 
 @MainActor @Suite struct Intents {
-    @Test func anInvalidDrawCountIsClampedNotACrash() {
-        #expect(makeStore(drawCount: 7).state.drawCount == 1)
+    @Test func anOutOfRangeNumberIsClampedNotACrash() {
         let store = makeStore()
-        store.newGame(drawCount: 0)
-        #expect(store.state.drawCount == 1)
-        store.newGame(drawCount: 3)
-        #expect(store.state.drawCount == 3)
+        store.newGame(number: 0)
+        #expect(store.state.number == 1)
+        store.newGame(number: 2_000_000)
+        #expect(store.state.number == 1_000_000)
     }
 
     @Test func aTapWithNowhereToGoChangesNothing() {
         let store = makeStore()
         let before = store.state
-        #expect(!store.tap(pile: .tableau(0), index: 5))       // no such card
-        #expect(!store.tap(pile: .stock, index: 0))
+        #expect(!store.tap(pile: .tableau(0), index: 9))       // no such card
+        #expect(!store.tap(pile: .foundation(0), index: 0))
         #expect(store.state == before && !store.canUndo)
     }
 
     @Test func anIllegalDropSpringsBackUnchanged() {
-        let store = makeStore()
+        let store = makeStore(at: position(columns: [cards("KD 5H"), cards("6D")]))
         let before = store.state
-        #expect(!store.drop(source: .tableau(6), index: 0, on: .tableau(0)))   // a face-down card
+        #expect(!store.drop(source: .tableau(0), index: 1, on: .tableau(1)))   // red on red
         #expect(store.state == before && !store.canUndo)
     }
 
-    @Test func aLegalTapMovesAndIsOneUndoStep() throws {
-        let store = makeStore()
-        let move = try #require(legalMoves(store.state).first { FreeCellEngine.autoDestination(for: $0.source, index: $0.index, in: store.state) != nil })
-        #expect(store.tap(pile: move.source, index: move.index))
+    @Test func aLegalTapMovesAndIsOneUndoStep() {
+        let store = makeStore(at: position(columns: [cards("KD 5H"), cards("6C")]))
+        #expect(store.tap(pile: .tableau(0), index: 1))
+        #expect(store.state.tableau[1] == cards("6C 5H"))
         #expect(store.state.moveCount == 1 && store.undoStack.count == 1)
     }
 }
 
 @MainActor @Suite struct Clock {
     @Test func theClockRunsOnlyWhileStartedUnwonAndActive() {
-        let store = makeStore()
+        let store = makeStore(at: position(columns: [cards("KD 5H"), cards("6C")]))
         store.tick()
         #expect(store.state.elapsed == 0, "not started before the first move")
-        store.tapStock()
+        #expect(store.tap(pile: .tableau(0), index: 1))
         store.tick(); store.tick()
         #expect(store.state.elapsed == 2)
         store.isActive = false

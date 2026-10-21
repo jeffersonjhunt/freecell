@@ -1,4 +1,5 @@
 import SwiftUI
+import FreeCellEngine
 
 /// The dark cards (spec "Colours and dialogs"): the win card and the "lose this game?" questions,
 /// over the table dimmed by a black scrim. One look on every platform, replacing the system
@@ -100,7 +101,7 @@ struct DialogCard<Content: View>: View {
     }
 }
 
-/// The small Space Mono label over a card's title ("NEW GAME", "DRAW 1").
+/// The small Space Mono label over a card's title ("NEW GAME", "GAME 617").
 struct DialogKicker: View {
     let text: String
     var body: some View {
@@ -146,34 +147,31 @@ struct QuestionCard: View {
     }
 }
 
-/// The win card: the draw mode, "You won!", the figures in Space Mono, then a new game in the
-/// same mode (orange), the other mode, and Close. `wide`: one row of buttons (iPad, the Mac, a
-/// phone held sideways); otherwise stacked for a phone held upright.
+/// The win card (spec "Colours and dialogs", from the mockups): the game number, "You won!", the
+/// time large in Space Mono with the moves under it, the Top 10 badge, then UNDOS, FREE CELLS and
+/// WINS, and New Game (orange), Choose a game, Top 10 and Close. `wide`: one row of buttons (iPad,
+/// the Mac, a phone held sideways); otherwise stacked for a phone held upright.
 struct WinCard: View {
-    let drawCount: Int
+    let number: Int
     var hardCore = false
-    let score: Int
-    /// The score's two parts: what the play earned and the time bonus (spec "Scoring").
-    var playScore = 0
-    var timeBonus = 0
     let moves: Int
     let elapsed: TimeInterval
-    let passes: Int
     let undos: Int
-    /// The win's place in its mode's Top 10, if it made the list.
+    let freeCells: Int
+    let wins: Int
+    /// The win's place in the Top 10, if it made the list.
     var topTenRank: Int?
     var wide = false
     var showTopTen: () -> Void = {}
-    let newGame: (Int) -> Void
+    let newGame: () -> Void
+    let chooseGame: () -> Void
     let close: () -> Void
     @AccessibilityFocusState private var titleFocused: Bool
-
-    private var other: Int { drawCount == 3 ? 1 : 3 }
 
     var body: some View {
         DialogCard(cornerRadius: wide ? 24 : 28, identifier: "winCard") {
             VStack(spacing: 6) {
-                DialogKicker(text: hardCore ? "DRAW \(drawCount) · HARD CORE" : "DRAW \(drawCount)")
+                DialogKicker(text: hardCore ? "GAME \(number) · HARD CORE" : "GAME \(number)")
                 Text("You won!")
                     .font(.largeTitle.bold())
                     .foregroundStyle(DialogColors.title)
@@ -182,27 +180,25 @@ struct WinCard: View {
             }
             .frame(maxWidth: .infinity)
             VStack(spacing: 8) {
-                Text("SCORE")
+                Text("TIME")
                     .font(AppFont.mono(11, relativeTo: .caption2))
                     .tracking(1.5)
                     .foregroundStyle(DialogColors.label)
-                Text(verbatim: "\(score)")
+                Text(verbatim: GameHeader.clock(elapsed))
                     .font(AppFont.mono(wide ? 52 : 60, bold: true, relativeTo: .largeTitle))
                     .foregroundStyle(DialogColors.title)
                     .minimumScaleFactor(0.6)
                     .lineLimit(1)
-                Text(verbatim: "PLAY \(playScore) + TIME BONUS \(timeBonus)")
+                Text(verbatim: moves == 1 ? "IN 1 MOVE" : "IN \(moves) MOVES")
                     .font(AppFont.mono(13, relativeTo: .footnote))
                     .foregroundStyle(DialogColors.body)
-                    .minimumScaleFactor(0.7)
-                    .lineLimit(1)
             }
             .frame(maxWidth: .infinity)
             .accessibilityElement(children: .ignore)
-            .accessibilityLabel("Score \(score)")
-            .accessibilityValue("play \(playScore) plus time bonus \(timeBonus)")
+            .accessibilityLabel("Time \(GameHeader.spokenClock(elapsed))")
+            .accessibilityValue("\(moves) moves")
             if let topTenRank {
-                Text("New Top 10 · #\(topTenRank) in Draw \(drawCount)")
+                Text("New Top 10 · #\(topTenRank)")
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(DialogColors.orangeText)
                     .padding(.horizontal, 12).padding(.vertical, 6)
@@ -211,10 +207,9 @@ struct WinCard: View {
                     .accessibilityIdentifier("topTenBadge")
             }
             HStack(spacing: 8) {
-                figure("MOVES", "\(moves)", spoken: "\(moves) moves")
-                figure("TIME", GameHeader.clock(elapsed), spoken: "Time \(GameHeader.spokenClock(elapsed))")
-                figure("PASSES", "\(passes)", spoken: passes == 1 ? "1 pass" : "\(passes) passes")
                 figure("UNDOS", "\(undos)", spoken: undos == 1 ? "1 undo" : "\(undos) undos")
+                figure("FREE CELLS", "\(freeCells)", spoken: "\(freeCells) free cells")
+                figure("WINS", "\(wins)", spoken: wins == 1 ? "1 win" : "\(wins) wins")
             }
             .padding(.vertical, 14)
             .overlay(alignment: .top) { DialogColors.hairline.frame(height: 1) }
@@ -231,6 +226,8 @@ struct WinCard: View {
                 .font(AppFont.mono(11, relativeTo: .caption2))
                 .tracking(1.3)
                 .foregroundStyle(DialogColors.label)
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
             Text(value)
                 .font(AppFont.mono(20, bold: true, relativeTo: .title3))
                 .foregroundStyle(DialogColors.title)
@@ -242,11 +239,11 @@ struct WinCard: View {
 
     @ViewBuilder
     private var buttons: some View {
-        let same = Button("New Game · Draw \(drawCount)") { newGame(drawCount) }
+        let new = Button("New Game", action: newGame)
             .buttonStyle(DialogButtonStyle(kind: .main, height: wide ? 44 : 54))
             .keyboardShortcut(.defaultAction)
         // In one row the main button gets whatever its neighbours leave, so its label is never cut.
-        let switchMode = Button("Draw \(other) instead") { newGame(other) }
+        let choose = Button("Choose a game", action: chooseGame)
             .buttonStyle(DialogButtonStyle(kind: .outlined, height: wide ? 44 : 48, fills: !wide))
         let closeButton = Button("Close", action: close)
             .buttonStyle(DialogButtonStyle(kind: wide ? .outlined : .plain, height: 44, fills: !wide))
@@ -255,16 +252,102 @@ struct WinCard: View {
             .buttonStyle(DialogButtonStyle(kind: .outlined, height: wide ? 44 : 48, fills: !wide))
         Group {
             if wide {
-                HStack(spacing: 8) { closeButton; topTen; switchMode; same }
+                HStack(spacing: 8) { closeButton; topTen; choose; new }
             } else {
                 VStack(spacing: 10) {
-                    same
-                    HStack(spacing: 10) { switchMode; topTen }
+                    new
+                    HStack(spacing: 10) { choose; topTen }
                     closeButton
                 }
             }
         }
         .focusable(false)
+    }
+}
+
+/// Choose a game (spec "Colours and dialogs", from the mockups): a game number from 1 to 1,000,000,
+/// Microsoft's numbering. Play deals it, Random game deals a random one, Cancel changes nothing.
+/// Opened mid-game it says the game will end, and Play is the confirmation — no second question.
+struct ChooseGameCard: View {
+    let inProgress: Bool
+    let play: (Int) -> Void
+    let random: () -> Void
+    let cancel: () -> Void
+    @State private var text = ""
+    @FocusState private var fieldFocused: Bool
+    @AccessibilityFocusState private var titleFocused: Bool
+
+    /// The number typed, if it is a game number.
+    nonisolated static func number(from text: String) -> Int? {
+        let digits = text.trimmingCharacters(in: .whitespaces)
+        guard !digits.isEmpty, digits.allSatisfy({ $0.isASCII && $0.isNumber }),
+              let n = Int(digits), FreeCellEngine.numbers.contains(n) else { return nil }
+        return n
+    }
+
+    var body: some View {
+        let chosen = Self.number(from: text)
+        DialogCard(identifier: "chooseGame") {
+            DialogKicker(text: "NEW GAME")
+            Text("Choose a game")
+                .font(.title2.bold())
+                .foregroundStyle(DialogColors.title)
+                .accessibilityAddTraits(.isHeader)
+                .accessibilityFocused($titleFocused)
+            Text("Every number from 1 to 1,000,000 is the same deal on any FreeCell that uses Microsoft’s numbering, so you can trade games with friends.")
+                .font(.callout)
+                .foregroundStyle(DialogColors.body)
+                .fixedSize(horizontal: false, vertical: true)
+            if inProgress {
+                Text("The game in progress will end.")
+                    .font(.callout.weight(.semibold))
+                    .foregroundStyle(DialogColors.orangeText)
+            }
+            VStack(alignment: .leading, spacing: 6) {
+                Text("GAME NUMBER")
+                    .font(AppFont.mono(11, relativeTo: .caption2))
+                    .tracking(1.3)
+                    .foregroundStyle(DialogColors.label)
+                TextField("1 – 1000000", text: $text)
+                    .textFieldStyle(.plain)
+                    .font(AppFont.mono(28, bold: true, relativeTo: .title))
+                    .foregroundStyle(DialogColors.title)
+                    #if os(iOS)
+                    .keyboardType(.numberPad)
+                    #endif
+                    .focused($fieldFocused)
+                    .onSubmit { if let chosen { play(chosen) } }
+                    .padding(.horizontal, 16)
+                    .frame(minHeight: 56)
+                    .background(RoundedRectangle(cornerRadius: 14).fill(Color(hex: 0x0A0A0A)))
+                    .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(DialogColors.orangeText, lineWidth: 1.5))
+                    .accessibilityLabel("Game number")
+                    .accessibilityIdentifier("gameNumber")
+                Text("Game 11982 is the one game of the first 32,000 that can’t be won.")
+                    .font(.footnote)
+                    .foregroundStyle(DialogColors.label)
+            }
+            VStack(spacing: 10) {
+                Button(chosen.map { "Play Game \($0)" } ?? "Play") { if let chosen { play(chosen) } }
+                    .buttonStyle(DialogButtonStyle(kind: .main, height: 54))
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(chosen == nil)
+                    .opacity(chosen == nil ? 0.45 : 1)
+                HStack(spacing: 10) {
+                    Button("Random game", action: random)
+                        .buttonStyle(DialogButtonStyle(kind: .outlined))
+                    Button("Cancel", action: cancel)
+                        .buttonStyle(DialogButtonStyle(kind: .outlined))
+                        .keyboardShortcut(.cancelAction)
+                }
+            }
+            .focusable(false)
+            .padding(.top, 4)
+        }
+        .onAppear {
+            titleFocused = true
+            fieldFocused = true
+        }
     }
 }
 

@@ -105,7 +105,8 @@ enum DecayTimeline {
 }
 
 /// Shuffle: the cards gather into two half-piles in the middle (0.9 s), riffle together into one
-/// deck (1.2 s), turn face down (0.3 s) and slide onto the draw pile (0.6 s), where they stay.
+/// deck (1.2 s), turn face down (0.3 s) and settle into a neat deck where they rest (0.6 s) — the
+/// middle of the table, FreeCell having no draw pile — where it stays.
 enum ShuffleTimeline {
     static let gather: TimeInterval = 0.9
     static let riffle: TimeInterval = 1.2
@@ -116,10 +117,10 @@ enum ShuffleTimeline {
     static func ease(_ x: Double) -> Double { let c = min(max(x, 0), 1); return c * c * (3 - 2 * c) }
 
     /// Card number `i` of `total` (deck order after the riffle): its centre, and whether its face
-    /// shows (the flip's first half) — given where it starts, the middle of the board, the draw
-    /// pile and the card width.
+    /// shows (the flip's first half) — given where it starts, the middle of the board, where the
+    /// deck comes to rest and the card width.
     static func place(_ i: Int, of total: Int, at t: TimeInterval, from start: CGPoint,
-                      middle: CGPoint, stock: CGPoint, cardWidth: CGFloat) -> (center: CGPoint, faceUp: Bool, squeeze: CGFloat) {
+                      middle: CGPoint, rest: CGPoint, cardWidth: CGFloat) -> (center: CGPoint, faceUp: Bool, squeeze: CGFloat) {
         let left = i % 2 == 0
         let half = CGPoint(x: middle.x + (left ? -0.85 : 0.85) * cardWidth, y: middle.y - CGFloat(i / 2) * 0.4)
         let stacked = CGPoint(x: middle.x, y: middle.y - CGFloat(i) * 0.4)
@@ -141,7 +142,7 @@ enum ShuffleTimeline {
             return (stacked, k < 0.5, CGFloat(abs(1 - 2 * k)))     // narrows to an edge, then the back widens
         }
         let k = ease((f - flip) / slide)
-        let deck = CGPoint(x: stock.x, y: stock.y - CGFloat(i) * 0.25)
+        let deck = CGPoint(x: rest.x, y: rest.y - CGFloat(i) * 0.25)
         return (lerp(stacked, deck, k), false, 1)
     }
 }
@@ -176,7 +177,7 @@ private struct WinTimelineCanvas: View {
                 ForEach(cards) { card in
                     CardView(card: card, width: cardWidth).tag(card.id)
                 }
-                CardView(card: Card(suit: .spades, rank: 1, isFaceUp: false), width: cardWidth).tag(Self.backID)
+                CardView(card: Card(suit: .spades, rank: 1), width: cardWidth, faceUp: false).tag(Self.backID)
             }
         }
         .contentShape(Rectangle())
@@ -276,7 +277,6 @@ private struct WinShuffle: View {
     var body: some View {
         // Deck order after the riffle: the two halves interleaved.
         let deck = CascadeSimulation.launchOrder(foundations)
-        let stockSlot = layout.slot(.stock)
         let width = layout.metrics.cardWidth
         WinTimelineCanvas(cards: deck, cardWidth: width, duration: ShuffleTimeline.duration,
                           onFinished: onFinished) { context, size, t in
@@ -285,7 +285,7 @@ private struct WinShuffle: View {
                 let f = foundations.firstIndex { $0.contains(card) } ?? 0
                 let slot = layout.slot(.foundation(f))
                 let place = ShuffleTimeline.place(i, of: deck.count, at: t, from: CGPoint(x: slot.midX, y: slot.midY),
-                                                  middle: middle, stock: CGPoint(x: stockSlot.midX, y: stockSlot.midY),
+                                                  middle: middle, rest: middle,
                                                   cardWidth: width)
                 guard let symbol = context.resolveSymbol(id: place.faceUp ? card.id : WinTimelineCanvas.backID) else { continue }
                 var c = context

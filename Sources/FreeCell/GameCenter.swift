@@ -6,39 +6,29 @@ import UIKit
 import AppKit
 #endif
 
-/// Game Center (spec "Scores"): sign-in at launch through Game Center's own prompt, each win
-/// submitted to the board for its draw mode and difficulty, and the player's best and rank read
-/// back for Scores. Signed out — or under tests — it does nothing.
+/// Game Center (spec "Scores"): sign-in at launch through Game Center's own prompt, each win's
+/// time submitted to the board for its difficulty, and the player's best and rank read back for
+/// Scores. Signed out — or under tests — it does nothing.
 @Observable @MainActor
 final class GameCenter {
+    /// Fastest wins, normal and Hard Core (spec "Scores"): scored in seconds, lowest first.
     enum Board: String, CaseIterable, Sendable {
-        case draw1 = "com.oneoffendeavors.freecell.draw1"
-        case draw3 = "com.oneoffendeavors.freecell.draw3"
-        case draw1HardCore = "com.oneoffendeavors.freecell.draw1.hardcore"
-        case draw3HardCore = "com.oneoffendeavors.freecell.draw3.hardcore"
+        case fastest = "com.oneoffendeavors.freecell.fastest"
+        case fastestHardCore = "com.oneoffendeavors.freecell.fastest.hardcore"
 
-        static func of(drawCount: Int, hardCore: Bool) -> Board {
-            switch (drawCount == 3, hardCore) {
-            case (false, false): .draw1
-            case (true, false): .draw3
-            case (false, true): .draw1HardCore
-            case (true, true): .draw3HardCore
-            }
-        }
+        static func of(hardCore: Bool) -> Board { hardCore ? .fastestHardCore : .fastest }
 
         var title: String {
             switch self {
-            case .draw1: "Draw 1"
-            case .draw3: "Draw 3"
-            case .draw1HardCore: "Draw 1 · Hard Core"
-            case .draw3HardCore: "Draw 3 · Hard Core"
+            case .fastest: "Fastest"
+            case .fastestHardCore: "Fastest · Hard Core"
             }
         }
     }
 
-    /// The player's best on a board and their place on it.
+    /// The player's best time on a board, in seconds, and their place on it.
     struct Standing: Equatable, Sendable {
-        let score: Int
+        let seconds: Int
         let rank: Int
     }
 
@@ -59,11 +49,11 @@ final class GameCenter {
         }
     }
 
-    func submit(score: Int, drawCount: Int, hardCore: Bool) {
+    func submit(seconds: Int, hardCore: Bool) {
         guard isEnabled, GKLocalPlayer.local.isAuthenticated else { return }
-        let board = Board.of(drawCount: drawCount, hardCore: hardCore).rawValue
+        let board = Board.of(hardCore: hardCore).rawValue
         Task {
-            try? await GKLeaderboard.submitScore(score, context: 0, player: GKLocalPlayer.local,
+            try? await GKLeaderboard.submitScore(seconds, context: 0, player: GKLocalPlayer.local,
                                                  leaderboardIDs: [board])
         }
     }
@@ -73,7 +63,7 @@ final class GameCenter {
               let leaderboard = try? await GKLeaderboard.loadLeaderboards(IDs: [board.rawValue]).first,
               let (mine, _) = try? await leaderboard.loadEntries(for: [GKLocalPlayer.local], timeScope: .allTime),
               let mine else { return nil }
-        return Standing(score: mine.score, rank: mine.rank)
+        return Standing(seconds: mine.score, rank: mine.rank)
     }
 
     /// Opens the board in Game Center (iOS 17 / macOS 14: Game Center's leaderboards).

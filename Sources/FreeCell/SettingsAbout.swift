@@ -10,21 +10,21 @@ struct SettingsView: View {
     @AppStorage(AppSettings.resumeKey, store: AppSettings.defaults) private var resumeOnLaunch = true
     @AppStorage(AppSettings.cardFaceKey, store: AppSettings.defaults) private var face = CardFaceStyle.classic
     @AppStorage(AppSettings.cardBackKey, store: AppSettings.defaults) private var back = CardBackStyle.classicBlue
-    @AppStorage(AppSettings.drawPileSideKey, store: AppSettings.defaults) private var drawPileSide = DrawPileSide.left
+    @AppStorage(AppSettings.playCardsHomeKey, store: AppSettings.defaults) private var playCardsHome = true
     @AppStorage(AppSettings.winAnimationKey, store: AppSettings.defaults) private var winAnimation = WinAnimation.cascade
     @AppStorage(AppSettings.askBeforeEndingGameKey, store: AppSettings.defaults) private var askBeforeEndingGame = true
     @AppStorage(AppSettings.restartButtonKey, store: AppSettings.defaults) private var restartButton = false
 
-    private static let previewAce = Card(suit: .spades, rank: 1, isFaceUp: true)
-    private static let previewKing = Card(suit: .hearts, rank: 13, isFaceUp: true)
-    private static let sampleFace = Card(suit: .hearts, rank: 1, isFaceUp: true)
-    private static let sampleBack = Card(suit: .clubs, rank: 2, isFaceUp: false)
+    private static let previewAce = Card(suit: .spades, rank: 1)
+    private static let previewKing = Card(suit: .hearts, rank: 13)
+    private static let sampleFace = Card(suit: .hearts, rank: 1)
+    private static let sampleBack = Card(suit: .clubs, rank: 2)
 
     var body: some View {
         Form {
             Section {
                 HStack(spacing: 14) {
-                    CardView(card: Self.sampleBack, width: 66)
+                    CardView(card: Self.sampleBack, width: 66, faceUp: false)
                     CardView(card: Self.previewAce, width: 66)
                     CardView(card: Self.previewKing, width: 66)
                 }
@@ -50,26 +50,25 @@ struct SettingsView: View {
                 })) {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Hard Core")
-                        Text("Draw 1: one pass through the deck. Draw 3: three. Changing it starts a new game.")
+                        Text("Two free cells instead of four. Changing it starts a new game.")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                     }
                 }
                 .accessibilityLabel("Hard Core")
-                .accessibilityHint("Limits passes through the deck. Changing it starts a new game")
+                .accessibilityHint("Two free cells instead of four. Changing it starts a new game")
                 .tint(TableColors.accent)
-                Toggle("Draw pile on the right", isOn: Binding(
-                    get: { drawPileSide == .right },
-                    set: { drawPileSide = $0 ? .right : .left }))
-                    .accessibilityLabel("Draw pile on the right")
+                Toggle("Play cards home automatically", isOn: $playCardsHome)
+                    .accessibilityLabel("Play cards home automatically")
+                    .accessibilityHint("Sends a card to its foundation once no other card could need it")
                     .tint(TableColors.accent)
                 Toggle("Ask before ending a game", isOn: $askBeforeEndingGame)
                     .accessibilityLabel("Ask before ending a game")
-                    .accessibilityHint("Asks before New Game or the draw switch replaces a game in progress")
+                    .accessibilityHint("Asks before a new game, Hard Core or Restart replaces a game in progress")
                     .tint(TableColors.accent)
                 Toggle("Restart button", isOn: $restartButton)
                     .accessibilityLabel("Restart button")
-                    .accessibilityHint("Shows a button that plays the same deal again from the start. A restarted game scores 0")
+                    .accessibilityHint("Shows a button that plays this game again from the start. A restarted game isn't recorded")
                     .tint(TableColors.accent)
             }
             Section {
@@ -90,7 +89,7 @@ struct SettingsView: View {
             }
             Section {
                 StyleChooser(selection: $back) { style in
-                    CardView(card: Self.sampleBack, width: 44)
+                    CardView(card: Self.sampleBack, width: 44, faceUp: false)
                         .environment(\.cardStyle, CardStyle(face: face, back: style))
                 }
             } header: {
@@ -187,7 +186,7 @@ struct AboutView: View {
                     Text("Version \(Self.version)")
                         .font(AppFont.mono(12, relativeTo: .caption))
                         .foregroundStyle(.secondary)
-                    Text("Klondike, made by One Off Endeavors. No ads, no tracking, nothing to sign up for. Your Top 10 syncs through your own iCloud, and your wins go to Game Center when you're signed in.")
+                    Text("FreeCell, made by One Off Endeavors. No ads, no tracking, nothing to sign up for. Your Top 10 syncs through your own iCloud, and your wins go to Game Center when you're signed in.")
                         .font(.subheadline)
                         .multilineTextAlignment(.center)
                         .padding(.top, 6)

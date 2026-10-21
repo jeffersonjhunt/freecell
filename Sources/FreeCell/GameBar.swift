@@ -27,9 +27,10 @@ enum TableColors {
     static let onAccent = Color(red: 0.039, green: 0.039, blue: 0.039)       // #0A0A0A
 }
 
-/// Score, time, moves and the draw chip, over the board — the same on every platform, its edges in line
+/// Time, moves and the game chip, over the board — the same on every platform, its edges in line
 /// with the outer columns (`width`, the board's used width). `compact`: the smaller form that sits
-/// inside the bar on a phone held sideways. The chip shows this game's draw mode and switches it.
+/// inside the bar on a phone held sideways. The chip shows this game's number (and Hard Core) and
+/// opens Choose a game. There is no score: FreeCell wins rank by time (spec "Scores").
 struct GameHeader: View {
     let store: GameStore
     let ui: AppUI
@@ -51,10 +52,6 @@ struct GameHeader: View {
 
     private var stats: some View {
         HStack(alignment: .bottom, spacing: compact ? 14 : 22) {
-            stat("SCORE", "\(store.score)")
-                .accessibilityElement(children: .ignore)
-                .accessibilityLabel("Score \(store.score)")
-                .accessibilityAddTraits(.isStaticText)
             stat("TIME", Self.clock(store.state.elapsed))
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel("Time \(Self.spokenClock(store.state.elapsed))")
@@ -64,19 +61,18 @@ struct GameHeader: View {
                 .accessibilityLabel("\(store.state.moveCount) moves")
                 .accessibilityAddTraits(.isStaticText)
             if !compact { Spacer(minLength: 8) }
-            drawChip
+            gameChip
         }
     }
 
-    /// "DRAW 1" / "DRAW 3": a button that switches to the other mode by dealing a new game in it
-    /// (asked first when a game is in progress). The capsule is 28 pt tall; its tap target reaches
-    /// 8 pt beyond it above and below (44 pt) without making the header any taller.
-    private var drawChip: some View {
-        let chip = Self.drawChip(current: store.state.drawCount, hardCore: store.state.isHardCore)
-        return Button { ui.requestNewGame(drawCount: chip.other, store: store) } label: {
+    /// "#24301" (· HC): a button that opens Choose a game. The capsule is 28 pt tall; its tap target
+    /// reaches 8 pt beyond it above and below (44 pt) without making the header any taller.
+    private var gameChip: some View {
+        let chip = Self.gameChip(number: store.state.number, hardCore: store.state.isHardCore)
+        return Button { ui.choosingGame = true } label: {
             HStack(spacing: 6) {
                 Text(chip.text)
-                Image(systemName: "arrow.left.arrow.right")
+                Image(systemName: "chevron.down")
                     .font(.system(size: 9, weight: .semibold))
                     .opacity(0.75)
             }
@@ -92,9 +88,9 @@ struct GameHeader: View {
         .focusable(false)                                       // see ActionBar.buttons
         .padding(.vertical, -8)
         .accessibilityLabel(chip.spoken)
-        .accessibilityHint(chip.hint)
-        .accessibilityInputLabels([chip.text.capitalized, chip.spoken, "Draw mode"])   // Voice Control: "Draw 1" works
-        .accessibilityIdentifier("drawChip")
+        .accessibilityHint("Choose a game by number")
+        .accessibilityInputLabels(["Game \(store.state.number)", "Choose a game", "Game number"])
+        .accessibilityIdentifier("gameChip")
     }
 
     private func stat(_ label: String, _ value: String) -> some View {
@@ -108,14 +104,10 @@ struct GameHeader: View {
         }
     }
 
-    /// The chip for this game's draw mode (and Hard Core), and the mode it switches to.
-    nonisolated static func drawChip(current: Int, hardCore: Bool = false)
-        -> (text: String, spoken: String, hint: String, other: Int) {
-        let other = current == 3 ? 1 : 3
-        let word = { $0 == 3 ? "three" : "one" }
-        return (hardCore ? "DRAW \(current) · HC" : "DRAW \(current)",
-                hardCore ? "Draw \(word(current)), Hard Core" : "Draw \(word(current))",
-                "Switches to Draw \(other) and starts a new game", other)
+    /// The chip for this game: its number, and Hard Core (spec "Hard Core").
+    nonisolated static func gameChip(number: Int, hardCore: Bool = false) -> (text: String, spoken: String) {
+        (hardCore ? "#\(number) · HC" : "#\(number)",
+         hardCore ? "Game \(number), Hard Core" : "Game \(number)")
     }
 
     static func clock(_ elapsed: TimeInterval) -> String {
@@ -131,10 +123,8 @@ struct GameHeader: View {
 }
 
 /// The controls along the bottom, the same on every platform: Undo, Restart (only with Settings ▸
-/// Restart button on), Finish (burnt orange
-/// when auto-finish is available), New Game (deals at once in the same mode; asks first mid-game)
-/// and More. Each is a 60 pt
-/// tall target; on iPad and the Mac the row is centred, at most 560 pt wide. `withStats`: a phone
+/// Restart button on), Finish (burnt orange when it is offered), New Game (a random game at once;
+/// asks first mid-game) and More. Each is a 60 pt tall target; on iPad and the Mac the row is centred, at most 560 pt wide. `withStats`: a phone
 /// held sideways, where height is short — the header folds in on the left and the buttons are
 /// 52 pt tall, which gives the cards back the header's height.
 struct ActionBar: View {
@@ -159,9 +149,8 @@ struct ActionBar: View {
         .overlay(alignment: .top) { Rectangle().fill(.white.opacity(0.08)).frame(height: 1) }
     }
 
-    /// Like cards, the controls never take keyboard focus (no focus ring; Space never presses a
-    /// focused button instead of drawing): the keyboard reaches all of them through the menus —
-    /// ⌘Z, ⌘↩, ⌘N, Game ▸ Draw Three, Help and Settings.
+    /// Like cards, the controls never take keyboard focus (no focus ring): the keyboard reaches all
+    /// of them through the menus — ⌘Z, ⌘↩, ⌘N, ⇧⌘N, ⌘R, Help and Settings.
     private var buttons: some View {
         HStack(spacing: 4) {
             Button { store.undo() } label: { BarLabel(title: "Undo", symbol: "arrow.uturn.backward") }
@@ -172,7 +161,7 @@ struct ActionBar: View {
                     BarLabel(title: "Restart", symbol: "arrow.counterclockwise")
                 }
                 .disabled(!store.canRestart)                    // a fresh deal is already the start
-                .accessibilityHint("Plays the same deal again from the start. A restarted game scores 0")
+                .accessibilityHint("Plays this game again from the start. A restarted game isn't recorded")
                 .focusable(false)
             }
             Button { store.autoFinish() } label: { BarLabel(title: "Finish", symbol: "forward") }
@@ -223,7 +212,7 @@ struct BarLabel: View {
     }
 }
 
-/// The draw chip: dims while pressed, like the bar's buttons.
+/// The game chip: dims while pressed, like the bar's buttons.
 struct ChipButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label.opacity(configuration.isPressed ? 0.6 : 1)

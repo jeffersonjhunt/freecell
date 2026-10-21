@@ -1,12 +1,10 @@
 import CoreGraphics
 import Foundation
-import FreeCellEngine
 
 /// macOS double-click is "the same as a tap" (spec). A double-click is two clicks, and the first
 /// already moved the card, so the second would land on whatever it uncovered and move that too.
 /// This drops any click that follows the previous one within the double-click interval, near the
-/// same point — so a double-click (or a triple-click) acts exactly once. It is for card moves only;
-/// the stock must count every click.
+/// same point — so a double-click (or a triple-click) acts exactly once.
 struct ClickFilter {
     let interval: TimeInterval
     let slop: CGFloat
@@ -29,18 +27,17 @@ struct ClickFilter {
     }
 }
 
-/// Decides what a tap or click does before the store sees it: a click on the stock always draws
-/// (every click counts, however fast); a click on a card is a move, unless it is a follow-up click
-/// of a macOS double- or triple-click, which is ignored. Accessibility actions (no point) always act.
+/// Decides what a tap or click does before the store sees it: a click on a card is a move, unless
+/// it is a follow-up click of a macOS double- or triple-click, which is ignored. Accessibility
+/// actions (no point) always act.
 struct TapRouter {
-    enum Action: Equatable { case draw, move, ignore }
+    enum Action: Equatable { case move, ignore }
 
     var clicks: ClickFilter
     /// macOS only: iOS has no double-click, so every tap acts.
     let filtersRepeatClicks: Bool
 
-    mutating func route(_ pile: PileID, at point: CGPoint?, time: Date = Date()) -> Action {
-        if case .stock = pile { return .draw }
+    mutating func route(at point: CGPoint?, time: Date = Date()) -> Action {
         guard filtersRepeatClicks, let point else { return .move }
         return clicks.accept(at: point, time: time) ? .move : .ignore
     }

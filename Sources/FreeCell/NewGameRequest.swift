@@ -1,68 +1,67 @@
 import Foundation
 import FreeCellEngine
 
-/// A new deal the player asked for (spec "New games and the draw mode"): New Game keeps the
-/// current game's mode; the draw chip and the Mac's draw items name one. A game in progress is
-/// asked about first — the alert in ContentView — and anything else is replaced at once.
+/// A new deal the player asked for (spec "New games"): New Game deals a random number, Choose a
+/// game a chosen one, the Hard Core switch a game in the other mode, and Restart this game again.
+/// A game in progress is asked about first — the question card in ContentView — and anything else
+/// is replaced at once.
 struct NewGameRequest: Equatable {
-    let drawCount: Int
-    /// A different draw mode from the game it would replace.
-    let switching: Bool
+    /// The game to deal; nil deals a random number.
+    var number: Int?
     /// Whether the new game is Hard Core.
     var hardCore = false
     /// Turning Hard Core on or off (the Settings switch), rather than a new game in the same mode.
     var changesHardCore = false
-    /// Restart: this same deal again from the start, rather than a new one.
+    /// Restart: this same game again from the start, rather than a new one.
     var restarts = false
 
     static func restart(_ state: GameState) -> NewGameRequest {
-        NewGameRequest(drawCount: state.drawCount, switching: false, hardCore: state.isHardCore, restarts: true)
+        NewGameRequest(number: state.number, hardCore: state.isHardCore, restarts: true)
     }
 
     var title: String {
         if restarts { return "Restart this game?" }
         if changesHardCore { return hardCore ? "Turn on Hard Core?" : "Turn off Hard Core?" }
-        return switching ? "Switch to Draw \(drawCount)?" : "Start a new game?"
+        return "Start a new game?"
     }
     var message: String {
         if restarts {
-            return "You’ll play the same deal again from the beginning. A restarted game scores 0 and doesn’t count toward your Top 10 or Game Center."
+            return "You’ll play the same game again from the beginning. A restarted game doesn’t count toward your Top 10, your wins or Game Center."
         }
         if changesHardCore && hardCore {
-            return "Draw 1 gets one pass through the deck, Draw 3 gets three. This starts a new game, and the current one will be lost."
+            return "Two free cells instead of four. This starts a new game, and the current one will be lost."
         }
-        return switching || changesHardCore ? "This starts a new game, and the current one will be lost." : "This one will be lost."
+        return changesHardCore ? "This starts a new game, and the current one will be lost." : "This one will be lost."
     }
     var confirm: String {
         if restarts { return "Restart" }
         if changesHardCore { return hardCore ? "Start Hard Core" : "Start New Game" }
-        return switching ? "Start New Game" : "New Game"
+        return "New Game"
     }
     /// The small label over the card's title.
     var kicker: String {
         if restarts { return "RESTART" }
         if changesHardCore { return "HARD CORE" }
-        return switching ? "DRAW \(drawCount == 3 ? 1 : 3) → DRAW \(drawCount)" : "NEW GAME"
+        return "NEW GAME"
     }
 }
 
 extension AppUI {
-    /// Deals a new game — in `drawCount`, or the current game's mode — at once, unless that would
-    /// lose a game in progress and the player wants to be asked (Settings ▸ Ask before ending a
-    /// game); then it only asks (`pendingNewGame`), and the question card deals or not. Asking
-    /// stops auto-finish, so the game cannot be won behind the question.
-    /// `hardCore`: nil keeps the current game's Hard Core mode (the Settings switch passes one).
-    func requestNewGame(drawCount: Int? = nil, hardCore: Bool? = nil, store: GameStore) {
-        let count = GameStore.validDrawCount(drawCount ?? store.state.drawCount)
+    /// Deals a new game — game `number`, or a random one — at once, unless that would lose a game
+    /// in progress and the player wants to be asked (Settings ▸ Ask before ending a game); then it
+    /// only asks (`pendingNewGame`), and the question card deals or not. Asking stops automatic
+    /// plays and Finish, so the game cannot be won behind the question.
+    /// `hardCore`: nil keeps the current game's mode (the Settings switch passes one).
+    /// `confirmed`: the player has already agreed to end the game (Choose a game's Play button).
+    func requestNewGame(number: Int? = nil, hardCore: Bool? = nil, confirmed: Bool = false, store: GameStore) {
         let hard = hardCore ?? store.state.isHardCore
-        guard store.isInProgress, asksBeforeEndingGame() else {
+        guard store.isInProgress, asksBeforeEndingGame(), !confirmed else {
             pendingNewGame = nil
-            store.newGame(drawCount: count, hardCore: hard)
+            deal(number: number, hardCore: hard, store: store)
             return
         }
         store.stopAutoFinish()
-        pendingNewGame = NewGameRequest(drawCount: count, switching: count != store.state.drawCount,
-                                        hardCore: hard, changesHardCore: hard != store.state.isHardCore)
+        pendingNewGame = NewGameRequest(number: number, hardCore: hard, changesHardCore: hard != store.state.isHardCore)
     }
 
     /// Restart (spec "Restart"): deals this game again from the start — at once, unless a game in
@@ -85,7 +84,15 @@ extension AppUI {
         if request.restarts {
             store.restart()
         } else {
-            store.newGame(drawCount: request.drawCount, hardCore: request.hardCore)
+            deal(number: request.number, hardCore: request.hardCore, store: store)
+        }
+    }
+
+    private func deal(number: Int?, hardCore: Bool, store: GameStore) {
+        if let number {
+            store.newGame(number: number, hardCore: hardCore)
+        } else {
+            store.newGame(hardCore: hardCore)                   // the store's own number source
         }
     }
 }

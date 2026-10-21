@@ -1,33 +1,36 @@
 import FreeCellEngine
 import SwiftUI
 
-/// Scores (spec "Scores"): a dark screen with a Draw 1 / Draw 3 switch, your Top 10 for that mode
-/// and its two Game Center boards. A sheet on iPhone and iPad (`done` closes it), a window on the Mac.
+/// Scores (spec "Scores"): a dark screen with your Top 10 (the ten fastest wins), how many games
+/// you've won, and the two Game Center boards. A sheet on iPhone and iPad (`done` closes it), a
+/// window on the Mac.
 struct ScoresView: View {
     let scores: ScoreBook
     let gameCenter: GameCenter
     var done: (() -> Void)?
-    @State private var drawCount: Int
     @State private var standings: [GameCenter.Board: GameCenter.Standing] = [:]
     @State private var loaded = false
 
-    init(scores: ScoreBook, gameCenter: GameCenter, drawCount: Int, done: (() -> Void)? = nil) {
+    init(scores: ScoreBook, gameCenter: GameCenter, done: (() -> Void)? = nil) {
         self.scores = scores
         self.gameCenter = gameCenter
         self.done = done
-        _drawCount = State(initialValue: drawCount == 3 ? 3 : 1)
     }
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
                 titleRow
-                modeSwitch
-                DialogKicker(text: "YOUR TOP 10")
+                DialogKicker(text: "YOUR TOP 10 · FASTEST WINS")
                 topTen
+                Text(scores.wins.total == 1 ? "1 game won" : "\(scores.wins.total) games won")
+                    .font(.footnote)
+                    .foregroundStyle(DialogColors.body)
+                    .frame(maxWidth: .infinity)
+                    .accessibilityIdentifier("winsCount")
                 DialogKicker(text: "GAME CENTER").padding(.top, 6)
                 boards
-                Text("Your Top 10 syncs through iCloud to your other devices.")
+                Text("Your Top 10 and wins sync through iCloud to your other devices.")
                     .font(.footnote)
                     .foregroundStyle(DialogColors.label)
                     .frame(maxWidth: .infinity)
@@ -38,7 +41,7 @@ struct ScoresView: View {
         .background(DialogColors.card.ignoresSafeArea())
         .environment(\.colorScheme, .dark)
         .accessibilityIdentifier("scores")
-        .task(id: drawCount) { await loadStandings() }
+        .task { await loadStandings() }
     }
 
     private var titleRow: some View {
@@ -60,33 +63,11 @@ struct ScoresView: View {
         .frame(minHeight: 44)
     }
 
-    private var modeSwitch: some View {
-        HStack(spacing: 0) {
-            ForEach([1, 3], id: \.self) { count in
-                let on = count == drawCount
-                Button { drawCount = count } label: {
-                    Text("DRAW \(count)")
-                        .font(AppFont.mono(13, bold: true, relativeTo: .subheadline))
-                        .tracking(1)
-                        .foregroundStyle(on ? TableColors.onAccent : DialogColors.title)
-                        .frame(maxWidth: .infinity, minHeight: 36)
-                        .background(RoundedRectangle(cornerRadius: 9).fill(on ? TableColors.accent : .clear))
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Draw \(count)")
-                .accessibilityAddTraits(on ? [.isButton, .isSelected] : .isButton)
-            }
-        }
-        .padding(3)
-        .background(RoundedRectangle(cornerRadius: 12).fill(Color(hex: 0x262626)))
-    }
-
     @ViewBuilder
     private var topTen: some View {
-        let list = scores.lists.list(drawCount: drawCount)
+        let list = scores.lists.entries
         if list.isEmpty {
-            Text("No wins yet in Draw \(drawCount).")
+            Text("No wins yet.")
                 .font(.callout)
                 .foregroundStyle(DialogColors.body)
                 .frame(maxWidth: .infinity, minHeight: 60)
@@ -109,7 +90,7 @@ struct ScoresView: View {
                 .font(AppFont.mono(13, relativeTo: .footnote))
                 .foregroundStyle(DialogColors.label)
                 .frame(width: 24, alignment: .leading)
-            Text(verbatim: "\(entry.score)")
+            Text(GameHeader.clock(entry.elapsed))
                 .font(AppFont.mono(17, bold: true, relativeTo: .body))
                 .foregroundStyle(DialogColors.title)
                 .frame(minWidth: 52, alignment: .leading)
@@ -120,7 +101,7 @@ struct ScoresView: View {
                 .background(RoundedRectangle(cornerRadius: 6).fill(TableColors.accent))
                 .opacity(entry.hardCore ? 1 : 0)
             Spacer(minLength: 4)
-            Text(GameHeader.clock(entry.elapsed))
+            Text(verbatim: "\(entry.moves) · #\(entry.number)")
                 .font(AppFont.mono(13, relativeTo: .footnote))
                 .foregroundStyle(DialogColors.body)
             Text(Self.day(entry.date))
@@ -133,14 +114,13 @@ struct ScoresView: View {
         .background(latest ? TableColors.accent.opacity(0.16) : .clear)
         .overlay(alignment: .bottom) { if !last { DialogColors.hairline.frame(height: 0.5) } }
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("\(rank). \(entry.score)\(entry.hardCore ? ", Hard Core" : ""), "
-                            + "\(GameHeader.spokenClock(entry.elapsed)), \(Self.day(entry.date))")
+        .accessibilityLabel("\(rank). \(GameHeader.spokenClock(entry.elapsed))\(entry.hardCore ? ", Hard Core" : ""), "
+                            + "\(entry.moves) moves, game \(entry.number), \(Self.day(entry.date))")
     }
 
     private var boards: some View {
         VStack(spacing: 0) {
-            let pair = [GameCenter.Board.of(drawCount: drawCount, hardCore: false),
-                        GameCenter.Board.of(drawCount: drawCount, hardCore: true)]
+            let pair = GameCenter.Board.allCases
             ForEach(pair, id: \.self) { board in
                 Button { gameCenter.show(board) } label: {
                     HStack(spacing: 10) {
@@ -168,14 +148,13 @@ struct ScoresView: View {
     private func standingText(_ board: GameCenter.Board) -> String {
         guard gameCenter.isSignedIn else { return "Not signed in" }
         guard let s = standings[board] else { return loaded ? "No score yet" : "…" }
-        return "\(s.score) · #\(s.rank.formatted())"
+        return "\(GameHeader.clock(TimeInterval(s.seconds))) · #\(s.rank.formatted())"
     }
 
     private func loadStandings() async {
         loaded = false
         var found: [GameCenter.Board: GameCenter.Standing] = [:]
-        for board in [GameCenter.Board.of(drawCount: drawCount, hardCore: false),
-                      GameCenter.Board.of(drawCount: drawCount, hardCore: true)] {
+        for board in GameCenter.Board.allCases {
             if let s = await gameCenter.standing(on: board) { found[board] = s }
         }
         standings = found

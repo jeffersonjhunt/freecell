@@ -3,13 +3,14 @@ import FreeCellEngine
 
 /// The table: pile outlines plus all 52 cards, each placed by `BoardLayout`. A card moving
 /// between piles is the same view animating to a new frame (0.2 s ease-out) — for every state
-/// change: a tap, a draw, auto-finish steps, undo, a new deal. A flip rotates over 0.25 s.
-/// Reduce Motion turns every animation off, including the wiggle and the win cascade.
+/// change: a move, an automatic play, a Finish step, undo, a new deal. Reduce Motion turns every
+/// animation off, including the wiggle and the win animation, and plays automatic plays at once.
 ///
 /// Input (spec "Interaction"): a tap or click sends a card to its auto destination, or wiggles it
-/// for 0.25 s if there is none; a drag lifts the card and its run after 8 pt, tracks 1:1 above
-/// every pile, drops on the nearest pile, and springs home in 0.2 s if the drop is illegal; a
-/// macOS double-click acts once, like a tap; hovering highlights the card under the pointer.
+/// for 0.25 s if there is none; a drag lifts the card and the cards below it after 8 pt, tracks
+/// 1:1 above every pile, drops on the nearest pile, and springs home in 0.2 s if the drop is
+/// refused (a run longer than the free spaces allow included); a macOS double-click acts once,
+/// like a tap; hovering highlights the card under the pointer.
 struct BoardView: View {
     let store: GameStore
     /// Called when the win cascade has finished (or was clicked to skip it).
@@ -18,7 +19,6 @@ struct BoardView: View {
     @Environment(\.winAnimation) private var winAnimation
     @Environment(\.displayScale) private var displayScale
     @Environment(\.cardStyle) private var cardStyle
-    @Environment(\.drawPileSide) private var drawPileSide
     @State private var dragTranslation: CGSize = .zero
     /// True while a drag gesture is live; resets on its own when the system cancels the gesture
     /// (which skips `onEnded`), so a cancelled drag still ends and springs home.
@@ -29,7 +29,6 @@ struct BoardView: View {
                                           filtersRepeatClicks: !BoardView.isTouch)
 
     static let moveAnimation = Animation.easeOut(duration: 0.2)
-    static let flipAnimation = Animation.easeOut(duration: 0.25)
     static let springBack = Animation.easeOut(duration: 0.2)
     static let dragThreshold: CGFloat = 8
     static let space = "board"
@@ -37,8 +36,7 @@ struct BoardView: View {
     var body: some View {
         GeometryReader { geo in
             let metrics = BoardMetrics(size: geo.size, isTouch: Self.isTouch)
-            let layout = BoardLayout(state: store.state, metrics: metrics, raised: store.movedCardIDs,
-                                     side: drawPileSide)
+            let layout = BoardLayout(state: store.state, metrics: metrics, raised: store.movedCardIDs)
             ZStack(alignment: .topLeading) {
                 outlines(layout)
                 ForEach(layout.placements) { p in
@@ -50,7 +48,7 @@ struct BoardView: View {
                 if cascading {
                     WinAnimationView(kind: winAnimation ?? .cascade, foundations: store.state.foundations,
                                      layout: layout, onFinished: onCascadeFinished)
-                        .id(store.state.seed)               // a fresh cascade for every win
+                        .id(store.dealID)                   // a fresh animation for every win
                         .zIndex(4000)
                 }
             }
@@ -60,13 +58,14 @@ struct BoardView: View {
                                   width: metrics.cardWidth, scale: displayScale, style: cardStyle)) {
                 guard !reduceMotion, store.canAutoFinish || store.state.isWon else { return }
                 let s = store.state
-                await CardImageCache.shared.prepare(s.stock + s.waste + s.foundations.flatMap { $0 }
+                await CardImageCache.shared.prepare(s.cells.compactMap { $0 } + s.foundations.flatMap { $0 }
                                                     + s.tableau.flatMap { $0 },
                                                     width: metrics.cardWidth, scale: displayScale, style: cardStyle)
             }
             .coordinateSpace(.named(Self.space))
             .animation(reduceMotion ? nil : Self.moveAnimation, value: store.state)
-            .animation(reduceMotion ? nil : Self.moveAnimation, value: drawPileSide)   // the top row slides across
+            .onAppear { store.animatesAutomaticPlays = !reduceMotion }
+            .onChange(of: reduceMotion) { _, reduce in store.animatesAutomaticPlays = !reduce }
             // However a drag ends — dropped, refused, cancelled by the system, or cut short by a
             // state change such as undo — the lifted cards settle: home in 0.2 s, or with the move.
             .onChange(of: store.pendingDrag) { _, drag in
@@ -97,9 +96,8 @@ struct BoardView: View {
         let role = CardAccessibility.of(p, in: store.state)
         let lifted = isLifted(p)
         return CardView(card: p.card, width: metrics.cardWidth,
-                        isHighlighted: hoveredID == p.card.id && p.card.isFaceUp,
+                        isHighlighted: hoveredID == p.card.id,
                         hasShadow: p.isExposed || lifted, isLifted: lifted)
-            .animation(reduceMotion ? nil : Self.flipAnimation, value: p.card.isFaceUp)
             .keyframeAnimator(initialValue: CGFloat(0), trigger: wiggles[p.card.id, default: 0]) { view, x in
                 view.offset(x: x)
             } keyframes: { _ in
@@ -174,21 +172,13 @@ struct BoardView: View {
     // MARK: Tap
 
     private func tapped(_ p: CardPlacement, _ layout: BoardLayout, at point: CGPoint?) {
-        switch router.route(p.pile, at: point) {
-        case .draw:
-            store.tapStock()
-            return
-        case .ignore:
-            return
-        case .move:
-            break
-        }
+        guard router.route(at: point) == .move else { return }
         if store.tap(pile: p.pile, index: p.index) { return }
-        // Nowhere to go: wiggle the card and its run (face-up waste and column cards only; a tap
-        // on a foundation does nothing by design, and face-down cards are not playable).
-        guard !reduceMotion, p.card.isFaceUp else { return }
+        // Nowhere to go: wiggle the card and the cards below it (a tap on a foundation does
+        // nothing by design).
+        guard !reduceMotion else { return }
         switch p.pile {
-        case .waste, .tableau:
+        case .cell, .tableau:
             for q in layout.placements where q.pile == p.pile && q.index >= p.index {
                 wiggles[q.card.id, default: 0] += 1
             }
@@ -202,21 +192,19 @@ struct BoardView: View {
     private func outlines(_ layout: BoardLayout) -> some View {
         let w = layout.metrics.cardWidth
         let state = store.state
-        let redeal = FreeCellEngine.canRedeal(state)
-        let outOfPasses = FreeCellEngine.isOutOfPasses(state)        // Hard Core: ✕, nothing to do
-        let stockLabel = !state.stock.isEmpty ? "Stock, \(state.stock.count) cards"
-            : redeal ? "Stock, empty. Redeal" : outOfPasses ? "Stock, empty. No passes left" : "Stock, empty"
         return ZStack(alignment: .topLeading) {
-            // VoiceOver: the stock is always this one element (its cards are hidden). Taps on the
-            // stock's cards reach `tapStock` through the cards themselves; this handles the empty stock.
-            outline(layout.slot(.stock), w, symbol: redeal ? "arrow.counterclockwise" : outOfPasses ? "xmark" : nil,
-                    label: stockLabel, spoken: true, action: { store.tapStock() })
-            outline(layout.slot(.waste), w, label: "Waste, empty", spoken: state.waste.isEmpty)
+            // Free cells: four, the last two closed (✕) in Hard Core (spec "Hard Core").
+            ForEach(0..<4, id: \.self) { c in
+                let open = c < state.cells.count
+                outline(layout.slot(.cell(c)), w, symbol: open ? nil : "xmark",
+                        label: open ? "Free cell \(c + 1), empty" : "Free cell \(c + 1), closed",
+                        spoken: !open || state.cells[c] == nil, closed: !open)
+            }
             ForEach(0..<4, id: \.self) { f in
                 outline(layout.slot(.foundation(f)), w, symbol: "a.square", label: "Foundation \(f + 1), empty",
                         spoken: state.foundations[f].isEmpty)
             }
-            ForEach(0..<7, id: \.self) { t in
+            ForEach(0..<8, id: \.self) { t in
                 outline(layout.slot(.tableau(t)), w, label: "Column \(t + 1), empty",
                         spoken: state.tableau[t].isEmpty)
             }
@@ -227,8 +215,8 @@ struct BoardView: View {
     /// outline only (a positioned view fills the whole board).
     @ViewBuilder
     private func outline(_ rect: CGRect, _ width: CGFloat, symbol: String? = nil, label: String,
-                         spoken: Bool, action: (() -> Void)? = nil) -> some View {
-        let base = PileOutline(width: width, symbol: symbol)
+                         spoken: Bool, closed: Bool = false, action: (() -> Void)? = nil) -> some View {
+        let base = PileOutline(width: width, symbol: symbol, closed: closed)
             .accessibilityElement()
             .accessibilityLabel(label)
             .accessibilityHidden(!spoken)

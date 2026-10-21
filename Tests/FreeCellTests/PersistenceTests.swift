@@ -10,106 +10,81 @@ private func tempSaveURL() -> URL {
 }
 
 @Suite struct Resumability {
-    let game = FreeCellEngine.newGame(drawCount: 1, seed: 4)
+    let game = FreeCellEngine.newGame(number: 617)
 
     @Test func aRealGameIsResumable() {
         #expect(SaveValidation.isResumable(game))
+        #expect(SaveValidation.isResumable(FreeCellEngine.newGame(number: 617, hardCore: true)))
     }
 
-    /// Anything invalid is discarded (spec: 52 distinct cards, not already won; decision F6: 4
-    /// foundations and 7 columns) — plus a valid draw mode and sane counters.
+    /// Anything invalid is discarded (spec "Persistence and settings"): 52 distinct cards, 8
+    /// columns, 4 foundations, a cell count matching the mode, a number in range, not won.
     @Test(arguments: [
-        "won", "3 foundations", "8 columns", "51 cards", "duplicate card", "rank 14", "draw 2",
-        "negative moves", "negative time", "negative redeals", "more redeals than moves",
-        "hard core past its passes", "negative undos",
-        "face-down column top", "face-up stock", "face-down waste", "foundation out of order",
-        "mixed foundation", "unbuilt run",
+        "won", "3 foundations", "9 columns", "51 cards", "duplicate card", "rank 14", "number 0",
+        "number too big", "hard core with four cells", "normal with two cells", "negative moves",
+        "negative time", "negative undos", "foundation out of order", "mixed foundation",
     ])
     func invalidSavesAreRejected(_ defect: String) {
         var s = game
         switch defect {
         case "won": s.isWon = true
         case "3 foundations": s.foundations.removeLast()
-        case "8 columns": s.tableau.append([])
-        case "51 cards": s.stock.removeLast()
-        case "duplicate card": s.stock[0] = s.stock[1]
-        case "rank 14": s.stock[0] = Card(suit: .clubs, rank: 14)
-        case "draw 2": s.drawCount = 2
+        case "9 columns": s.tableau.append([])
+        case "51 cards": s.tableau[0].removeLast()
+        case "duplicate card": s.tableau[0][0] = s.tableau[0][1]
+        case "rank 14": s.tableau[0][0] = Card(suit: .clubs, rank: 14)
+        case "number 0": s.number = 0
+        case "number too big": s.number = 1_000_001
+        case "hard core with four cells": s.isHardCore = true
+        case "normal with two cells": s.cells = [nil, nil]
         case "negative moves": s.moveCount = -1
         case "negative time": s.elapsed = -1
-        case "negative redeals": s.redeals = -1
-        case "more redeals than moves": s.moveCount = 3; s.redeals = 4
-        case "hard core past its passes": s.isHardCore = true; s.drawCount = 1; s.moveCount = 30; s.redeals = 1
         case "negative undos": s.undos = -1
-        case "face-down column top": s.tableau[6][6].isFaceUp = false
-        case "face-up stock": s.stock[0].isFaceUp = true
-        case "face-down waste":
-            FreeCellEngine.drawFromStock(&s)
-            s.waste[0].isFaceUp = false
-        case "foundation out of order", "mixed foundation", "unbuilt run":
-            // Rebuild the piles by hand from a legal, spread-out position.
-            s = board(defect)
+        case "foundation out of order", "mixed foundation":
+            let pull = { (suit: Suit, rank: Int) -> Card in
+                let c = Card(suit: suit, rank: rank)
+                for t in s.tableau.indices { s.tableau[t].removeAll { $0 == c } }
+                return c
+            }
+            s.foundations[0] = defect == "mixed foundation"
+                ? [pull(.spades, 1), pull(.hearts, 2)] : [pull(.spades, 1), pull(.spades, 3)]
         default: Issue.record("unknown defect")
         }
         #expect(!SaveValidation.isResumable(s), "\(defect)")
     }
 }
 
-/// A 52-card position laid out by hand, with one structural defect.
-private func board(_ defect: String) -> GameState {
-    var s = FreeCellEngine.newGame(drawCount: 1, seed: 4)
-    var all = (s.stock + s.tableau.flatMap { $0 }).map { c -> Card in var c = c; c.isFaceUp = false; return c }
-    func take(_ suit: Suit, _ rank: Int) -> Card {
-        let i = all.firstIndex { $0.suit == suit && $0.rank == rank }!
-        var c = all.remove(at: i); c.isFaceUp = true; return c
-    }
-    s.foundations = [[], [], [], []]
-    s.tableau = Array(repeating: [], count: 7)
-    switch defect {
-    case "foundation out of order":
-        s.foundations[0] = [take(.spades, 1), take(.spades, 3)]
-    case "mixed foundation":
-        s.foundations[0] = [take(.spades, 1), take(.hearts, 2)]
-    default:                                              // "unbuilt run": 9♥ under 8♥ (same colour)
-        s.tableau[0] = [take(.hearts, 9), take(.hearts, 8)]
-    }
-    s.stock = all
-    s.waste = []
-    return s
-}
-
 @Suite struct ResumabilityOfRealPlay {
     /// Validation must never reject a position real play produces (or a resumed game would be
-    /// thrown away): every state along 40 random games passes.
+    /// thrown away): every state along 40 random games — automatic plays included — passes.
     @Test func everyPositionFromRealPlayIsResumable() {
         var checked = 0
-        for seed in UInt64(1)...40 {
-            var s = FreeCellEngine.newGame(drawCount: seed % 2 == 0 ? 1 : 3, seed: seed)
-            var rng = SplitMix64(seed: seed)
-            for _ in 0..<250 where !s.isWon {
-                #expect(SaveValidation.isResumable(s), "seed \(seed) move \(s.moveCount)")
+        for number in 1...40 {
+            var s = FreeCellEngine.newGame(number: number, hardCore: number % 4 == 0)
+            var rng = SplitMix64(seed: UInt64(number))
+            for _ in 0..<150 where !s.isWon {
+                #expect(SaveValidation.isResumable(s), "game \(number) move \(s.moveCount)")
                 checked += 1
-                let moves = legalMoves(s)
-                if !moves.isEmpty && rng.next() % 3 != 0 {
-                    FreeCellEngine.apply(moves[Int(rng.next() % UInt64(moves.count))], to: &s)
-                } else {
-                    FreeCellEngine.drawFromStock(&s)
-                }
+                let moves = randomPlayerMoves(s)
+                guard !moves.isEmpty else { break }
+                FreeCellEngine.apply(moves[Int(rng.next() % UInt64(moves.count))], to: &s)
+                FreeCellEngine.settle(&s)
             }
         }
-        #expect(checked > 5000)
+        #expect(checked > 3000)
     }
 }
 
 @Suite struct Saving {
-    let game = FreeCellEngine.newGame(drawCount: 3, seed: 9)
+    let game = FreeCellEngine.newGame(number: 9, hardCore: true)
 
     @Test func aSaveRoundTrips() async throws {
         let url = tempSaveURL()
         let saver = GameSaver(url: url)
         var s = game
-        FreeCellEngine.drawFromStock(&s)
+        s.cells[0] = s.tableau[0].removeLast()
         s.elapsed = 42
+        s.moveCount = 1
         try await saver.save(s, sequence: 1)
         #expect(GameSaver.load(from: url) == s)
     }
@@ -151,26 +126,23 @@ private func board(_ defect: String) -> GameState {
 }
 
 @Suite struct Launching {
-    let saved = FreeCellEngine.newGame(drawCount: 3, seed: 9)
+    let saved = FreeCellEngine.newGame(number: 9)
 
     @Test func resumeWhenWantedAndPresent() {
-        #expect(LaunchPlan.decide(saved: saved, resumePreferred: true, drawCount: 1) == .resume(saved))
+        #expect(LaunchPlan.decide(saved: saved, resumePreferred: true) == .resume(saved))
     }
 
     @MainActor @Test func dealFreshOtherwiseInTheRememberedMode() {
-        #expect(LaunchPlan.decide(saved: saved, resumePreferred: false, drawCount: 3) == .deal(drawCount: 3))
-        #expect(LaunchPlan.decide(saved: nil, resumePreferred: true, drawCount: 3) == .deal(drawCount: 3))
-        #expect(LaunchPlan.decide(saved: nil, resumePreferred: true, drawCount: 3, hardCore: true)
-                == .deal(drawCount: 3, hardCore: true), "a fresh launch deals Hard Core if the last deal was")
-        #expect(GameStore.launch(.deal(drawCount: 1, hardCore: true), drawCount: 1, saver: nil).state.isHardCore)
-        #expect(LaunchPlan.decide(saved: nil, resumePreferred: true, drawCount: 7) == .deal(drawCount: 1),
-                "a corrupt setting is clamped")
+        #expect(LaunchPlan.decide(saved: saved, resumePreferred: false) == .deal(hardCore: false))
+        #expect(LaunchPlan.decide(saved: nil, resumePreferred: true, hardCore: true) == .deal(hardCore: true),
+                "a fresh launch deals Hard Core if the last deal was")
+        #expect(GameStore.launch(.deal(hardCore: true), saver: nil).state.isHardCore)
     }
 
     /// A fresh deal at launch is saved at once, so an older game left on disk cannot come back.
     @MainActor @Test func aFreshDealIsSavedImmediately() async {
         let url = tempSaveURL()
-        let store = GameStore.launch(.deal(drawCount: 3), drawCount: 3, saver: GameSaver(url: url))
+        let store = GameStore.launch(.deal(hardCore: false), saver: GameSaver(url: url))
         await store.lastSave?.value
         #expect(GameSaver.load(from: url) == store.state)
     }
@@ -183,10 +155,10 @@ private func board(_ defect: String) -> GameState {
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         try Data("x".utf8).write(to: url)
         let suite = try #require(UserDefaults(suiteName: env["FREECELL_DEFAULTS_SUITE"]!))
-        suite.set(3, forKey: AppSettings.drawCountKey)
+        suite.set(true, forKey: AppSettings.hardCoreKey)
         SaveLocation.resetForTests(environment: env)
         #expect(!FileManager.default.fileExists(atPath: url.path))
-        #expect(UserDefaults(suiteName: env["FREECELL_DEFAULTS_SUITE"]!)?.object(forKey: AppSettings.drawCountKey) == nil)
+        #expect(UserDefaults(suiteName: env["FREECELL_DEFAULTS_SUITE"]!)?.object(forKey: AppSettings.hardCoreKey) == nil)
         var withoutName = env
         withoutName["FREECELL_SAVE_FILE"] = nil                   // would resolve to game.json
         let real = try #require(SaveLocation.url(environment: withoutName))
@@ -207,10 +179,10 @@ private func board(_ defect: String) -> GameState {
 
 @MainActor @Suite struct SaveTriggers {
     @Test func everyChangeSavesButTheClockOnlyEveryFiveSeconds() {
-        let a = FreeCellEngine.newGame(drawCount: 1, seed: 4)
-        var drawn = a
-        FreeCellEngine.drawFromStock(&drawn)
-        #expect(GameStore.shouldSave(from: a, to: drawn), "a draw")
+        let a = FreeCellEngine.newGame(number: 4)
+        var moved = a
+        moved.cells[0] = moved.tableau[0].removeLast()
+        #expect(GameStore.shouldSave(from: a, to: moved), "a move")
         var t = a
         for second in 1...10 {
             let before = t
@@ -219,15 +191,15 @@ private func board(_ defect: String) -> GameState {
         }
     }
 
-    /// The draw-count setting is written whenever it changes — not from a view that may be gone.
-    @Test func theDrawCountIsRememberedWheneverItChanges() {
+    /// Hard Core is written whenever it changes — not from a view that may be gone.
+    @Test func hardCoreIsRememberedWheneverItChanges() {
         let store = makeStore()
-        var remembered: [Int] = []
-        store.rememberDrawCount = { remembered.append($0) }
-        store.newGame(drawCount: 3)
-        store.newGame(drawCount: 1)
-        store.newGame(drawCount: 1)                                 // unchanged: not written again
-        #expect(remembered == [3, 1])
+        var remembered: [Bool] = []
+        store.rememberHardCore = { remembered.append($0) }
+        store.newGame(hardCore: true)
+        store.newGame(hardCore: false)
+        store.newGame(hardCore: false)                              // unchanged: not written again
+        #expect(remembered == [true, false])
     }
 
     /// Quitting or backgrounding waits until the save is on disk.
@@ -235,7 +207,7 @@ private func board(_ defect: String) -> GameState {
         let url = tempSaveURL()
         let store = makeStore()
         store.saver = GameSaver(url: url)
-        store.tapStock()
+        playAMove(store)
         for _ in 0..<3 { store.tick() }                             // 3 s: not a save on its own
         store.flushSaves()
         #expect(GameSaver.load(from: url) == store.state, "on disk when flushSaves returns")
@@ -246,10 +218,10 @@ private func board(_ defect: String) -> GameState {
         let url = tempSaveURL()
         let store = makeStore()
         store.saver = GameSaver(url: url)
-        store.tapStock()
+        playAMove(store)
         await store.lastSave?.value
         #expect(GameSaver.load(from: url) == store.state)
-        store.tapStock()
+        playAMove(store)
         store.undo()
         await store.lastSave?.value
         #expect(GameSaver.load(from: url) == store.state, "after undo")

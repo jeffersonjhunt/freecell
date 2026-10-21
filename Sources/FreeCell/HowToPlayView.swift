@@ -26,11 +26,9 @@ struct HowToPlayView: View {
 
 /// The sections themselves, without the scroll view (so they can also be rendered to an image).
 struct HowToPlayContent: View {
-    @AppStorage(AppSettings.drawPileSideKey, store: AppSettings.defaults) private var drawPileSide = DrawPileSide.left
-
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
-            ForEach(HowToPlay.sections(drawPile: drawPileSide)) { section in
+            ForEach(HowToPlay.sections) { section in
                 VStack(alignment: .leading, spacing: 6) {
                     Text(section.title)
                         .font(.headline)
@@ -54,42 +52,36 @@ enum HowToPlay {
         var id: String { title }
     }
 
-    /// With the draw pile on the left (the default).
-    static var sections: [Section] { sections(drawPile: .left) }
-
-    /// Where the stock and foundations are follows the draw pile setting (spec "Top row").
-    static func sections(drawPile: DrawPileSide) -> [Section] {
-        let (stock, foundations) = drawPile == .left ? ("top left", "top right") : ("top right", "top left")
-        return [
+    static var sections: [Section] {
+        [
             Section(title: "Goal", lines: [
-                "Move all 52 cards onto the four foundations (marked **A**, \(foundations)) — one pile per suit, from ace up to king.",
+                "Move all 52 cards onto the four **foundations** (top right, marked **A**) — one pile per suit, from ace up to king.",
             ]),
             Section(title: "The deal", lines: [
-                "Seven columns: the first has one card, the seventh has seven. Only the last card of each column is face up.",
-                "The other 24 cards are the **stock** (\(stock)). Cards you draw go face up on the **waste** beside it. (Settings can put this draw pile on either side.)",
+                "Every card is dealt face up into **eight columns** — four of seven cards, four of six. Top left are four **free cells**, each holding one card.",
+                "Every game has a **number** (top right of the header, **#24301**). Tap it to play any game from 1 to 1,000,000: the numbers are Microsoft's, so game 617 here is game 617 in any FreeCell.",
             ]),
             Section(title: "Moves", lines: [
-                "**To a foundation:** an ace onto an empty foundation, then the same suit one rank higher. Cards go up from the waste or the bottom of a column.",
-                "**Between columns:** onto a card one rank higher of the opposite colour — a red 7 onto a black 8. A face-up run moves together.",
-                "**Empty column:** only a king, with any run on it.",
-                "**Back from a foundation:** drag its top card onto a column, under the same colour and rank rule.",
-                "A face-down card uncovered at the bottom of a column turns over by itself.",
+                "**To a foundation:** an ace onto an empty foundation, then the same suit one rank higher.",
+                "**Between columns:** the last card of a column (or a free cell's card) onto a card one rank higher of the opposite colour — a red 7 onto a black 8. Any card can go into an empty column.",
+                "**To a free cell:** the last card of a column, into an empty cell.",
+                "**Runs:** a run in order at the end of a column moves together if your free spaces could carry it card by card: **(empty free cells + 1) × 2 for each empty column**. Into an empty column, half that.",
+                "Cards on a foundation stay there.",
             ]),
-            Section(title: "Scoring", lines: [
-                "Every game starts at **0**: **+5** for each card on a foundation and **+35** for each finished suit; **−3** for each undo and **−100** for each pass through the deck after the first. The score never goes below 0.",
-                "Win, and a **time bonus** is added: **600**, less 1 point a second in the second minute, 2 in the third, and so on — gone by 5:00. A one-pass win in under a minute scores **1000**.",
+            Section(title: "Playing cards home", lines: [
+                "A card no other card could still need goes to its foundation by itself: aces and twos, and any card once both foundations of the other colour are one rank behind. Turn this off in **Settings** to place every card yourself.",
+            ]),
+            Section(title: "Your best", lines: [
+                "There are no points: wins rank by **time**, then by fewer **moves**. A run moved together is one move; cards the game plays home cost none.",
+                "Your **Top 10** keeps the ten fastest wins, and Game Center has a leaderboard for normal games and one for Hard Core.",
             ]),
             Section(title: "Hard Core", lines: [
-                "A harder game: **one pass** through the deck in Draw 1, **three** in Draw 3. When they're used up the stock shows ✕. Turn it on in **Settings** — changing it starts a new game.",
-            ]),
-            Section(title: "The stock", lines: [
-                "Draw one card, or three in **Draw 3** mode — then only the top card of the waste can be played.",
-                "When the stock is empty, draw again to turn the waste back over. There is no limit.",
+                "**Two free cells** instead of four — fewer games can be won. Turn it on in **Settings**; changing it starts a new game.",
             ]),
             Section(title: "Controls", lines: controls),
             Section(title: "Winning", lines: [
-                "When the stock and waste are empty and every card is face up, **Auto-finish** appears and plays the rest.",
-                "There is no losing: if you are stuck, undo or deal again. Once you win, the game is locked.",
+                "When every column is in order, **Finish** plays the rest home.",
+                "Almost every game can be won (of the first million numbers, eight can't). If you're stuck, undo or start again. Once you win, the game is locked.",
             ]),
             Section(title: "Saving", lines: [
                 "Your game is saved as you play and resumes at the next launch (undo starts fresh). \(resumeSetting)",
@@ -109,23 +101,19 @@ enum HowToPlay {
     private static var controls: [String] {
         #if os(macOS)
         [
-            "**Click** a card to send it to its best spot (double-click works too); **drag** to place it exactly.",
-            "**Click the stock** or press **Space** to draw.",
-            "The bar along the bottom: **Undo**, **Finish** (auto-finish, once every card can go home), **New Game** and **More** (How to Play, Settings — with the card faces and backs — and About).",
-            "**DRAW 1 / DRAW 3** at the top switches mode by starting a new game (so does **Game ▸ Draw Three**). Mid-game, it and **New Game** ask first (unless you've turned that off in Settings).",
-            "**⌘Z** undo · **⌘N** new game · **⌘↩\u{FE0E}** auto-finish · **File ▸ New Game: Draw 1 / Draw 3** · **Settings (⌘,)**.",
-            "Turn on **Restart button** in Settings and **Restart** (or **⌘R**) plays the same deal again from the start. A restarted game scores 0 and doesn't count toward your Top 10 or Game Center.",
-            "A card with nowhere to go wiggles. Clicking a card on a foundation does nothing — drag it if you mean to.",
+            "**Click** a card to send it to its best spot (double-click works too); **drag** to place it exactly. A card with nowhere to go wiggles.",
+            "The bar along the bottom: **Undo**, **Finish** (once every column is in order), **New Game** (a random game) and **More** (How to Play, Scores, Settings and About).",
+            "Click the game number at the top, or **File ▸ Choose Game… (⇧⌘N)**, to play a game by number. Mid-game, **New Game** asks first (unless you've turned that off in Settings).",
+            "**⌘Z** undo · **⌘N** new game · **⇧⌘N** choose a game · **⌘↩\u{FE0E}** finish · **Settings (⌘,)**.",
+            "Turn on **Restart button** in Settings and **Restart** (or **⌘R**) plays this game again from the start. A restarted game doesn't count toward your Top 10, your wins or Game Center.",
         ]
         #else
         [
-            "**Tap** a card to send it to its best spot; **drag** to place it exactly.",
-            "**Tap the stock** to draw.",
-            "The bar along the bottom: **Undo**, **Finish** (auto-finish, once every card can go home), **New Game** (same draw mode) and **More** (How to Play, Settings — with the card faces and backs — and About).",
-            "Tap **DRAW 1 / DRAW 3** at the top to switch mode — that starts a new game. Mid-game, it and **New Game** ask first (unless you've turned that off in Settings).",
-            "With a keyboard: **⌘Z** undo · **⌘N** new game · **Space** draw · **⌘↩\u{FE0E}** auto-finish.",
-            "Turn on **Restart button** in Settings and **Restart**, beside Undo, plays the same deal again from the start. A restarted game scores 0 and doesn't count toward your Top 10 or Game Center.",
-            "A card with nowhere to go wiggles. Tapping a card on a foundation does nothing — drag it if you mean to.",
+            "**Tap** a card to send it to its best spot; **drag** to place it exactly. A card with nowhere to go wiggles.",
+            "The bar along the bottom: **Undo**, **Finish** (once every column is in order), **New Game** (a random game) and **More** (How to Play, Scores, Settings and About).",
+            "Tap the game number at the top to play a game by number. Mid-game, **New Game** asks first (unless you've turned that off in Settings).",
+            "With a keyboard: **⌘Z** undo · **⌘N** new game · **⇧⌘N** choose a game · **⌘↩\u{FE0E}** finish.",
+            "Turn on **Restart button** in Settings and **Restart**, beside Undo, plays this game again from the start. A restarted game doesn't count toward your Top 10, your wins or Game Center.",
         ]
         #endif
     }

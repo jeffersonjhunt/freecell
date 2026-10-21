@@ -15,11 +15,10 @@ struct FreeCellApp: App {
         let scores = ScoreBook(local: AppSettings.defaults,
                                cloud: AppSettings.usesOutsideServices ? .default : nil)
         let gameCenter = GameCenter(enabled: AppSettings.usesOutsideServices)
-        // Every win goes into the Top 10 and to its Game Center board (spec "Scores").
+        // Every win goes into the Top 10 and the wins, and its time to Game Center (spec "Scores").
         store.onWin = { state in
             scores.record(state)
-            gameCenter.submit(score: FreeCellEngine.score(state), drawCount: state.drawCount,
-                              hardCore: state.isHardCore)
+            gameCenter.submit(seconds: Int(state.elapsed), hardCore: state.isHardCore)
         }
         _store = State(initialValue: store)
         _scores = State(initialValue: scores)
@@ -65,7 +64,7 @@ struct FreeCellApp: App {
         }
 
         Window("Scores", id: ScoresWindow.id) {
-            ScoresView(scores: scores, gameCenter: gameCenter, drawCount: store.state.drawCount)
+            ScoresView(scores: scores, gameCenter: gameCenter)
                 .frame(width: 420, height: 660)
         }
         .windowResizability(.contentSize)
@@ -78,8 +77,8 @@ struct FreeCellApp: App {
         #endif
     }
 
-    /// Resume the saved game if the player wants that and it is valid; otherwise deal fresh in the
-    /// remembered draw mode. Undo always starts empty.
+    /// Resume the saved game if the player wants that and it is valid; otherwise deal a fresh random
+    /// game in the remembered mode. Undo always starts empty.
     private static func makeStore() -> GameStore {
         SaveLocation.resetForTests()
         let url = SaveLocation.url()
@@ -95,7 +94,7 @@ struct FreeCellApp: App {
         #else
         store = launchFromSave(url: url, saver: saver)
         #endif
-        store.rememberDrawCount = { AppSettings.defaults.set($0, forKey: AppSettings.drawCountKey) }
+        store.playsCardsHome = { AppSettings.playsCardsHome }
         store.rememberHardCore = { AppSettings.defaults.set($0, forKey: AppSettings.hardCoreKey) }
         saveBeforeTheProcessMayEnd(store)
         return store
@@ -103,12 +102,11 @@ struct FreeCellApp: App {
 
     private static func launchFromSave(url: URL?, saver: GameSaver?) -> GameStore {
         let defaults = AppSettings.defaults
-        let drawCount = defaults.object(forKey: AppSettings.drawCountKey) as? Int ?? 1
         let resume = defaults.object(forKey: AppSettings.resumeKey) as? Bool ?? true
         let hardCore = defaults.object(forKey: AppSettings.hardCoreKey) as? Bool ?? false
         let plan = LaunchPlan.decide(saved: url.flatMap(GameSaver.load(from:)), resumePreferred: resume,
-                                     drawCount: drawCount, hardCore: hardCore)
-        return GameStore.launch(plan, drawCount: drawCount, saver: saver)
+                                     hardCore: hardCore)
+        return GameStore.launch(plan, saver: saver)
     }
 
     /// Quitting on the Mac and backgrounding on iOS may end the process moments later, so wait for
@@ -127,28 +125,28 @@ struct FreeCellApp: App {
     }
 }
 
-/// Settings live in UserDefaults (spec): the draw count of the last deal (default 1) and whether
-/// to resume the game in progress at launch (default yes). Debug builds let UI tests use their own
-/// suite, so a test choosing Draw 3 never changes the player's real preference.
+/// Settings live in UserDefaults (spec "Persistence and settings"). Debug builds let UI tests use
+/// their own suite, so a test never changes the player's real preferences.
 enum AppSettings {
-    static let drawCountKey = "drawCount"
     /// Whether the last deal was Hard Core (spec "Hard Core"); the next fresh deal follows it.
     static let hardCoreKey = "hardCore"
     static let resumeKey = "resumeOnLaunch"
     /// The card face and back (spec "Card styles"); an unknown stored value reads as the default.
     static let cardFaceKey = "cardFace"
     static let cardBackKey = "cardBack"
-    /// Which side the draw pile sits on ("left" / "right"; spec "Top row"); unknown reads as left.
-    static let drawPileSideKey = "drawPileSide"
+    /// Settings ▸ Play cards home automatically (spec "Game rules"); unset or not a Bool reads as yes.
+    static let playCardsHomeKey = "playCardsHome"
     /// The win animation (spec "Win animations"); unknown reads as Cascade.
     static let winAnimationKey = "winAnimation"
-    /// Whether a game in progress is asked about before a new deal replaces it (spec "New games
-    /// and the draw mode"); unset or not a Bool reads as yes.
+    /// Whether a game in progress is asked about before a new deal replaces it (spec "New
+    /// games"); unset or not a Bool reads as yes.
     static let askBeforeEndingGameKey = "askBeforeEndingGame"
     /// Settings ▸ Restart button (off by default; spec "Restart").
     static let restartButtonKey = "restartButton"
 
     static var askBeforeEndingGame: Bool { askBeforeEndingGame(in: defaults) }
+
+    static var playsCardsHome: Bool { defaults.object(forKey: playCardsHomeKey) as? Bool ?? true }
 
     static func askBeforeEndingGame(in defaults: UserDefaults) -> Bool {
         defaults.object(forKey: askBeforeEndingGameKey) as? Bool ?? true
@@ -173,10 +171,9 @@ enum AppSettings {
     }
 }
 
-/// Menus and keyboard shortcuts (spec: New Game ⌘N, Undo ⌘Z, Draw space, Auto-finish ⌘⏎, and
-/// Toggle draw mode in a Game menu; the standard window and help groups stay). On the Mac, the
-/// File menu also carries the new-game draw-count pair. The same commands give iPadOS its
-/// hardware-keyboard shortcuts.
+/// Menus and keyboard shortcuts (spec "Interaction": New Game ⌘N, Undo ⌘Z, Finish ⌘↩, Restart ⌘R
+/// with the button on; the standard window and help groups stay). The same commands give iPadOS
+/// its hardware-keyboard shortcuts.
 struct GameCommands: Commands {
     let store: GameStore
     let ui: AppUI
@@ -188,9 +185,8 @@ struct GameCommands: Commands {
             Group {
                 Button("New Game") { ui.requestNewGame(store: store) }
                     .keyboardShortcut("n")
-                Divider()
-                Button("New Game: Draw 1") { ui.requestNewGame(drawCount: 1, store: store) }
-                Button("New Game: Draw 3") { ui.requestNewGame(drawCount: 3, store: store) }
+                Button("Choose Game…") { ui.choosingGame = true }
+                    .keyboardShortcut("n", modifiers: [.command, .shift])
             }
             .disabled(ui.cardIsShowing)
         }
@@ -201,9 +197,7 @@ struct GameCommands: Commands {
         }
         CommandMenu("Game") {
             Group {
-                Button("Draw") { store.tapStock() }
-                    .keyboardShortcut(.space, modifiers: [])
-                Button("Auto-finish") { store.autoFinish() }
+                Button("Finish") { store.autoFinish() }
                     .keyboardShortcut(.return)
                     .disabled(!store.canAutoFinish)
                 if showsRestart {
@@ -211,11 +205,6 @@ struct GameCommands: Commands {
                         .keyboardShortcut("r")
                         .disabled(!store.canRestart)
                 }
-                Divider()
-                // Switches as the draw chip does: a new deal in the other mode, asked first mid-game.
-                Toggle("Draw Three", isOn: Binding(
-                    get: { store.state.drawCount == 3 },
-                    set: { ui.requestNewGame(drawCount: $0 ? 3 : 1, store: store) }))
             }
             .disabled(ui.cardIsShowing)
         }
@@ -233,6 +222,8 @@ final class AppUI {
     var showingScores = false
     /// A new deal waiting for the player to confirm losing the game in progress.
     var pendingNewGame: NewGameRequest?
+    /// Choose a game is open (the header chip, the win card, ⇧⌘N).
+    var choosingGame = false
     /// Whether to ask before a new deal replaces a game in progress (the Settings switch; tests
     /// substitute their own).
     @ObservationIgnored var asksBeforeEndingGame: () -> Bool = { AppSettings.askBeforeEndingGame }
@@ -242,7 +233,7 @@ final class AppUI {
     var showingMore = false
     /// A dark card (a question or the win card) is up: it is modal, so the game's menu commands
     /// and shortcuts stand down until it closes (spec "Colours and dialogs").
-    var cardIsShowing: Bool { pendingNewGame != nil || showingWinCard || showingMore }
+    var cardIsShowing: Bool { pendingNewGame != nil || showingWinCard || showingMore || choosingGame }
 }
 
 /// Help ▸ FreeCell Help (⌘?): the How to Play window on the Mac, the help sheet on iPad with a

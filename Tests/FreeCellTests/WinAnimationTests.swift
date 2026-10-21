@@ -79,15 +79,16 @@ import Testing
 }
 
 @Suite struct Shuffle {
-    let start = CGPoint(x: 300, y: 100), middle = CGPoint(x: 200, y: 400), stock = CGPoint(x: 30, y: 100)
+    let start = CGPoint(x: 300, y: 100), middle = CGPoint(x: 200, y: 400)
 
-    @Test func gatheredRiffledFlippedAndOnTheDrawPile() {
-        let first = ShuffleTimeline.place(5, of: 52, at: 0, from: start, middle: middle, stock: stock, cardWidth: 50)
+    /// FreeCell has no draw pile: the deck comes to rest in the middle of the table.
+    @Test func gatheredRiffledFlippedAndRestingMidTable() {
+        let first = ShuffleTimeline.place(5, of: 52, at: 0, from: start, middle: middle, rest: middle, cardWidth: 50)
         #expect(first.center == start && first.faceUp, "starts on its foundation, face up")
-        let end = ShuffleTimeline.place(5, of: 52, at: ShuffleTimeline.duration, from: start, middle: middle, stock: stock, cardWidth: 50)
-        #expect(abs(end.center.x - stock.x) < 0.5 && !end.faceUp, "ends on the draw pile, face down")
+        let end = ShuffleTimeline.place(5, of: 52, at: ShuffleTimeline.duration, from: start, middle: middle, rest: middle, cardWidth: 50)
+        #expect(abs(end.center.x - middle.x) < 0.5 && !end.faceUp, "ends in the middle, face down")
         let midFlip = ShuffleTimeline.gather + ShuffleTimeline.riffle + ShuffleTimeline.flip / 2
-        #expect(ShuffleTimeline.place(5, of: 52, at: midFlip, from: start, middle: middle, stock: stock, cardWidth: 50).squeeze < 0.1,
+        #expect(ShuffleTimeline.place(5, of: 52, at: midFlip, from: start, middle: middle, rest: middle, cardWidth: 50).squeeze < 0.1,
                 "edge-on halfway through the flip")
     }
 }

@@ -3,50 +3,49 @@ import Observation
 import FreeCellEngine
 
 /// The only object that changes game state. Views call its intents and never mutate state
-/// themselves; every change pushes an undo snapshot first.
+/// themselves; every change the player makes pushes an undo snapshot first.
 @Observable @MainActor
 final class GameStore {
     static let undoLimit = 300
-    static let autoFinishStep: Duration = .milliseconds(90)
+    /// The pause between automatic plays and Finish steps (spec "Layout and visuals").
+    static let autoStep: Duration = .milliseconds(90)
 
     private(set) var state: GameState {
         didSet {
             let moved = Self.movedCards(from: oldValue, to: state)
             if !moved.isEmpty {
                 movedCardIDs = moved
-                // Any change that moves cards (undo, a draw, an auto-finish step, a resume) ends a
-                // drag in progress — the card it held may not be where it was. The clock's tick
-                // moves nothing and leaves the drag alone.
+                // Any change that moves cards (undo, an automatic play, a Finish step, a resume)
+                // ends a drag in progress — the card it held may not be where it was. The clock's
+                // tick moves nothing and leaves the drag alone.
                 pendingDrag = nil
             }
             if Self.shouldSave(from: oldValue, to: state) { scheduleSave() }
         }
     }
-    /// The cards the latest change moved between piles (a move, draw, redeal, undo or deal). The
-    /// board raises them above everything while they animate, so they never slide under a deeper
-    /// column; the clock ticking does not reset it.
+    /// This deal's identity: new for every deal — a new game, a restart (the same number again) or
+    /// a resume — so the win card and the win animation belong to one playing of a game.
+    private(set) var dealID = UUID()
+    /// The cards the latest change moved between piles. The board raises them above everything
+    /// while they animate, so they never slide under a deeper column.
     private(set) var movedCardIDs: Set<Int> = []
-    /// The draw mode of the last deal (or of the game resumed): what New Game deals next and what a
-    /// fresh launch deals. Every change is remembered straight away, whether or not a game window
-    /// is open. Only dealing changes it — the draw chip switches mode by dealing (spec "New games
-    /// and the draw mode").
-    private(set) var lastDrawCount: Int {
-        didSet { if lastDrawCount != oldValue { rememberDrawCount?(lastDrawCount) } }
-    }
-    /// Stores the draw-count setting (UserDefaults in the app; nil in tests).
-    @ObservationIgnored var rememberDrawCount: ((Int) -> Void)?
     /// Whether the last deal (or the game resumed) is Hard Core: what New Game deals next.
-    /// Remembered straight away, like the draw count; only dealing changes it.
+    /// Remembered straight away; only dealing changes it.
     private(set) var lastHardCore: Bool {
         didSet { if lastHardCore != oldValue { rememberHardCore?(lastHardCore) } }
     }
     @ObservationIgnored var rememberHardCore: ((Bool) -> Void)?
-    /// Called once when a move wins the game (spec "Scores": the app records it) — not for a
-    /// restarted game, which never counts (spec "Restart").
+    /// Settings ▸ Play cards home automatically (spec "Game rules"); tests set it directly.
+    @ObservationIgnored var playsCardsHome: () -> Bool = { true }
+    /// Whether automatic plays and Finish step 90 ms apart (the board turns this off under Reduce
+    /// Motion; tests turn it off to settle at once).
+    @ObservationIgnored var animatesAutomaticPlays = true
+    /// Called once when the game is won (spec "Scores": the app records it) — not for a restarted
+    /// game, which never counts (spec "Restart").
     @ObservationIgnored var onWin: ((GameState) -> Void)?
-    /// The card being dragged (with its run), from `beginDrag` until `drop` or `cancelDrag`.
+    /// The card being dragged (with the cards below it), from `beginDrag` until `drop` or `cancelDrag`.
     private(set) var pendingDrag: PendingDrag?
-    /// The latest thing worth a haptic (iOS): a move, a draw, a win. Nothing on failure.
+    /// The latest thing worth a haptic (iOS): a move or a win. Nothing on failure.
     private(set) var feedback: FeedbackEvent?
 
     struct PendingDrag: Equatable {
@@ -55,7 +54,7 @@ final class GameStore {
     }
 
     struct FeedbackEvent: Equatable {
-        enum Kind: Equatable { case move, draw, win }
+        enum Kind: Equatable { case move, win }
         let kind: Kind
         let sequence: Int                 // distinguishes two identical events in a row
     }
@@ -70,79 +69,79 @@ final class GameStore {
     @ObservationIgnored private var saveSequence = 0
     /// The latest save in flight; each waits for the one before it.
     @ObservationIgnored private(set) var lastSave: Task<Void, Never>?
-    @ObservationIgnored private let makeSeed: () -> UInt64
+    @ObservationIgnored private let makeNumber: () -> Int
     @ObservationIgnored private var clock: Task<Void, Never>?
-    @ObservationIgnored private var finishing: Task<Void, Never>?
+    /// Automatic plays after a move, or Finish: one card home every `autoStep`.
+    @ObservationIgnored private var stepping: Task<Void, Never>?
+    @ObservationIgnored private var steppingIsFinish = false
 
-    /// - Parameter makeSeed: where deal seeds come from; tests inject a fixed sequence.
-    init(drawCount: Int = 1, hardCore: Bool = false,
-         makeSeed: @escaping () -> UInt64 = { UInt64.random(in: .min ... .max) }) {
-        self.makeSeed = makeSeed
-        lastDrawCount = Self.validDrawCount(drawCount)
+    /// - Parameter makeNumber: where New Game's numbers come from; tests inject a fixed sequence.
+    init(hardCore: Bool = false, makeNumber: @escaping () -> Int = GameStore.randomNumber) {
+        self.makeNumber = makeNumber
         lastHardCore = hardCore
-        state = FreeCellEngine.newGame(drawCount: Self.validDrawCount(drawCount), seed: makeSeed(),
-                                        hardCore: hardCore)
+        state = FreeCellEngine.newGame(number: makeNumber(), hardCore: hardCore)
+    }
+
+    nonisolated static func randomNumber() -> Int {
+        var generator = SystemRandomNumberGenerator()
+        return FreeCellEngine.randomNumber(using: &generator)
     }
 
     /// Nothing undoes a win: a won game cannot be un-won (spec decision).
     var canUndo: Bool { !undoStack.isEmpty && !state.isWon }
     var canAutoFinish: Bool { FreeCellEngine.canAutoFinish(state) }
-    /// The live score (spec "Scoring"): the play score, and the time bonus once won.
-    var score: Int { FreeCellEngine.score(state) }
-    var playScore: Int { FreeCellEngine.playScore(state) }
-    var timeBonus: Int {
-        state.isWon && !state.isRestarted ? FreeCellEngine.timeBonus(seconds: Int(state.elapsed)) : 0
-    }
     /// Restart has something to do once a move has been made (a fresh deal is already the start).
     var canRestart: Bool { state.moveCount > 0 }
-    /// A game the player would lose by dealing again: a move (a draw included) made, and not won.
-    /// Only such a game is asked about before a new deal replaces it.
+    /// A game the player would lose by dealing again: a move made, and not won. Only such a game is
+    /// asked about before a new deal replaces it.
     var isInProgress: Bool { state.moveCount > 0 && !state.isWon }
 
     // MARK: Intents
 
-    /// Deals a new game in the remembered draw mode.
-    func newGame() {
-        newGame(drawCount: lastDrawCount)
+    /// Deals a random game number (never one of the eight unwinnable). `hardCore`: nil keeps the
+    /// last deal's mode.
+    func newGame(hardCore: Bool? = nil) {
+        newGame(number: makeNumber(), hardCore: hardCore)
     }
 
-    /// Deals a new game. An out-of-range draw count (e.g. a corrupted setting) becomes 1; the
-    /// choice is remembered for the next deal.
-    /// `hardCore`: nil keeps the last deal's Hard Core mode.
-    func newGame(drawCount: Int, hardCore: Bool? = nil) {
-        stopAutoFinish()
+    /// Deals game `number` (clamped into range). `hardCore`: nil keeps the last deal's mode.
+    func newGame(number: Int, hardCore: Bool? = nil) {
+        stopStepping()
         pendingDrag = nil
-        lastDrawCount = Self.validDrawCount(drawCount)
         lastHardCore = hardCore ?? lastHardCore
-        state = FreeCellEngine.newGame(drawCount: lastDrawCount, seed: makeSeed(), hardCore: lastHardCore)
+        let n = min(max(number, FreeCellEngine.numbers.lowerBound), FreeCellEngine.numbers.upperBound)
+        state = FreeCellEngine.newGame(number: n, hardCore: lastHardCore)
+        dealID = UUID()
         undoStack.removeAll()
         updateClock()
     }
 
-    /// Deals this game again from the start (spec "Restart"); it scores 0 until a new game.
+    /// Deals this game again from the start (spec "Restart"); its win is never recorded.
     func restart() {
         guard canRestart else { return }
-        stopAutoFinish()
+        stopStepping()
         pendingDrag = nil
         state = FreeCellEngine.restart(state)
+        dealID = UUID()
         undoStack.removeAll()
         updateClock()
     }
 
     /// Continues a game from a given state (a saved game, or a test position). Undo starts empty.
     func resume(from saved: GameState) {
-        stopAutoFinish()
-        lastDrawCount = Self.validDrawCount(saved.drawCount)
+        stopStepping()
         lastHardCore = saved.isHardCore
         state = saved
+        dealID = UUID()
         undoStack.removeAll()
         updateClock()
     }
 
-    /// Tap or click on a card: sends it (with its run) to the best legal destination.
+    /// Tap or click on a card: sends it (with the cards below it) to the best legal destination.
     /// Returns false when nothing can move, so the view can wiggle instead.
     @discardableResult
     func tap(pile: PileID, index: Int) -> Bool {
+        settleNow()
         guard let destination = FreeCellEngine.autoDestination(for: pile, index: index, in: state) else {
             return false
         }
@@ -151,9 +150,10 @@ final class GameStore {
     }
 
     /// A drag has passed its threshold on this card. Returns false (and holds nothing) for a card
-    /// that cannot be picked up: face down, buried in the waste or a foundation, or the stock.
+    /// that cannot be picked up: on a foundation, or under an out-of-order card.
     @discardableResult
     func beginDrag(pile: PileID, index: Int) -> Bool {
+        settleNow()
         guard FreeCellEngine.canPickUp(from: pile, index: index, in: state) else { return false }
         pendingDrag = PendingDrag(source: pile, index: index)
         return true
@@ -167,48 +167,36 @@ final class GameStore {
     @discardableResult
     func drop(source: PileID, index: Int, on destination: PileID) -> Bool {
         pendingDrag = nil
+        settleNow()
         let move = Move(source: source, index: index, destination: destination)
         guard FreeCellEngine.canMove(move, in: state) else { return false }
         perform(move)
         return true
     }
 
-    /// Tap on the stock: draw, or redeal when the stock is empty.
-    func tapStock() {
-        guard !state.isWon, !(state.stock.isEmpty && state.waste.isEmpty) else { return }
-        record()
-        FreeCellEngine.drawFromStock(&state)
-        announce(.draw)
-        updateClock()
-    }
-
-    /// Takes back the last change: board, moves and passes as they were — but the clock keeps its
-    /// time and the undo is counted (spec "Scoring"), so undoing never earns back time or points.
+    /// Takes back the last move — with the automatic plays it set off — or the last Finish step.
+    /// The clock keeps its time and the undo is counted, so undoing never earns back time.
     func undo() {
         guard canUndo, var previous = undoStack.popLast() else { return }
-        stopAutoFinish()
+        stopStepping()
         previous.elapsed = state.elapsed
         previous.undos = state.undos + 1
         state = previous
         updateClock()
     }
 
-    /// Plays the rest of the game to the foundations, one normal (undoable) move every 90 ms.
+    /// Plays every remaining card home, lowest first, one every 90 ms; each step is its own undo
+    /// step and costs no move.
     func autoFinish() {
-        guard canAutoFinish, finishing == nil else { return }
-        finishing = Task { [weak self] in
-            while let self, !Task.isCancelled, let move = FreeCellEngine.nextAutoFinishMove(in: self.state) {
-                self.perform(move)
-                try? await Task.sleep(for: Self.autoFinishStep)
-            }
-            // A cancelled run must not clear the handle of a run started after it.
-            if !Task.isCancelled { self?.finishing = nil }
-        }
+        guard canAutoFinish, !isAutoFinishing else { return }
+        settleNow()
+        guard canAutoFinish else { return }
+        step(finishing: true)
     }
 
     // MARK: Clock
 
-    /// The game has started once the player has done something.
+    /// The game has started once the player has made a move.
     var isRunning: Bool { isActive && !state.isWon && state.moveCount > 0 }
 
     /// One second of play. Called by the clock; tests call it directly.
@@ -232,11 +220,74 @@ final class GameStore {
         }
     }
 
+    // MARK: Automatic plays and Finish
+
+    /// True while Finish is sending cards home.
+    var isAutoFinishing: Bool { stepping != nil && steppingIsFinish }
+
+    /// Stops automatic plays or Finish where they are (a new deal, a resume, undo, or a question
+    /// card); Finish stays available to start again.
+    func stopAutoFinish() {
+        stopStepping()
+    }
+
+    private func stopStepping() {
+        stepping?.cancel()
+        stepping = nil
+        steppingIsFinish = false
+    }
+
+    /// The next card the game plays by itself: a Finish step, or an automatic play home.
+    private func nextAutomatic(finishing: Bool) -> Move? {
+        finishing ? FreeCellEngine.nextAutoFinishMove(in: state)
+                  : (playsCardsHome() ? FreeCellEngine.nextSafePlay(in: state) : nil)
+    }
+
+    /// Plays the game's own moves: at once without animation, else one every `autoStep`.
+    private func step(finishing: Bool) {
+        stopStepping()
+        guard nextAutomatic(finishing: finishing) != nil else { return }
+        guard animatesAutomaticPlays else {
+            while let move = nextAutomatic(finishing: finishing) { playAutomatic(move, finishing: finishing) }
+            return
+        }
+        steppingIsFinish = finishing
+        stepping = Task { [weak self] in
+            while let self, !Task.isCancelled, let move = self.nextAutomatic(finishing: finishing) {
+                try? await Task.sleep(for: Self.autoStep)
+                guard !Task.isCancelled else { return }
+                self.playAutomatic(move, finishing: finishing)
+            }
+            // A cancelled run must not clear the handle of a run started after it.
+            if !Task.isCancelled { self?.stepping = nil; self?.steppingIsFinish = false }
+        }
+    }
+
+    /// Plays any automatic plays still waiting, at once — so a new move never races them.
+    private func settleNow() {
+        guard stepping != nil, !steppingIsFinish else { return }
+        stopStepping()
+        while let move = nextAutomatic(finishing: false) { playAutomatic(move, finishing: false) }
+    }
+
+    private func playAutomatic(_ move: Move, finishing: Bool) {
+        guard FreeCellEngine.canMove(move, in: state) else { return }
+        if finishing { record() }                           // each Finish step undoes on its own
+        FreeCellEngine.applyAutomatic(move, to: &state)
+        afterChange()
+    }
+
     // MARK: Helpers
 
     private func perform(_ move: Move) {
         record()
         FreeCellEngine.apply(move, to: &state)
+        afterChange()
+        if !state.isWon { step(finishing: false) }
+    }
+
+    /// Feedback, the win, and the clock after any change.
+    private func afterChange() {
         announce(state.isWon ? .win : .move)
         if state.isWon && !state.isRestarted { onWin?(state) }
         updateClock()
@@ -254,20 +305,9 @@ final class GameStore {
         }
     }
 
-    /// True while auto-finish is sending cards home.
-    var isAutoFinishing: Bool { finishing != nil }
-
-    /// Stops auto-finish where it is (a new deal, a resume, or the new-game question); Finish
-    /// stays available to start it again.
-    func stopAutoFinish() {
-        finishing?.cancel()
-        finishing = nil
-    }
-
     // MARK: Saving
 
-    /// Save after every applied change — a move, draw, redeal, undo, deal or resume — and, while
-    /// only the clock runs, on every fifth second (spec).
+    /// Save after every applied change, and, while only the clock runs, on every fifth second.
     nonisolated static func shouldSave(from old: GameState, to new: GameState) -> Bool {
         var oldIgnoringClock = old
         oldIgnoringClock.elapsed = new.elapsed
@@ -281,8 +321,7 @@ final class GameStore {
     }
 
     /// Save now and wait (up to `timeout`) until it is on disk — for moments the process may end
-    /// right after: quitting on the Mac, going to the background on iOS. Safe to block the main
-    /// thread: save tasks run off the main actor.
+    /// right after. Safe to block the main thread: save tasks run off the main actor.
     func flushSaves(timeout: TimeInterval = 2) {
         guard saver != nil else { return }
         scheduleSave()
@@ -299,7 +338,6 @@ final class GameStore {
         guard let saver else { return }
         saveSequence += 1
         let (snapshot, sequence, previous) = (state, saveSequence, lastSave)
-        // Detached: the write never needs the main actor, so `flushSaves` can wait on it.
         lastSave = Task.detached {
             await previous?.value
             try? await saver.save(snapshot, sequence: sequence)
@@ -308,15 +346,15 @@ final class GameStore {
 
     /// The store the app starts with: the saved game resumed, or a fresh deal — which is saved at
     /// once, so an older save left on disk can never come back later.
-    static func launch(_ plan: LaunchPlan, drawCount: Int, saver: GameSaver?) -> GameStore {
+    static func launch(_ plan: LaunchPlan, saver: GameSaver?) -> GameStore {
         let store: GameStore
         switch plan {
         case .resume(let saved):
-            store = GameStore(drawCount: drawCount)
+            store = GameStore(hardCore: saved.isHardCore)
             store.resume(from: saved)
             store.saver = saver
-        case .deal(let count, let hardCore):
-            store = GameStore(drawCount: count, hardCore: hardCore)
+        case .deal(let hardCore):
+            store = GameStore(hardCore: hardCore)
             store.saver = saver
             store.saveNow()
         }
@@ -326,17 +364,12 @@ final class GameStore {
     nonisolated static func movedCards(from old: GameState, to new: GameState) -> Set<Int> {
         func piles(_ s: GameState) -> [Int: PileID] {
             var out: [Int: PileID] = [:]
-            for c in s.stock { out[c.id] = .stock }
-            for c in s.waste { out[c.id] = .waste }
+            for (i, c) in s.cells.enumerated() { if let c { out[c.id] = .cell(i) } }
             for (f, pile) in s.foundations.enumerated() { for c in pile { out[c.id] = .foundation(f) } }
             for (t, pile) in s.tableau.enumerated() { for c in pile { out[c.id] = .tableau(t) } }
             return out
         }
         let before = piles(old)
         return Set(piles(new).compactMap { id, pile in before[id] == pile ? nil : id })
-    }
-
-    nonisolated static func validDrawCount(_ drawCount: Int) -> Int {
-        drawCount == 3 ? 3 : 1
     }
 }

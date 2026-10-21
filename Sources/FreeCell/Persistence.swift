@@ -52,37 +52,23 @@ struct SaveFile: Codable, Equatable {
     }
 }
 
-/// Whether a decoded save is a game we can resume: 52 distinct real cards in 4 foundations and 7
-/// columns, a valid draw mode, sane counters, not already won (spec + decision F6) — and piles
-/// shaped the way play leaves them, so a damaged file can never restore a stuck game: stock face
-/// down, waste face up, each foundation one suit ascending from the ace, each column face-down
-/// cards under a face-up built run with a face-up last card. Anything else is discarded silently
-/// and a fresh game dealt.
+/// Whether a decoded save is a game we can resume (spec "Persistence and settings"): 52 distinct
+/// real cards in 4 foundations and 8 columns, as many free cells as its mode has, a game number in
+/// range, sane counters, not already won — and foundations built the way play builds them (one
+/// suit, ascending from the ace). Anything else is discarded silently and a fresh game dealt.
 enum SaveValidation {
     static func isResumable(_ s: GameState) -> Bool {
-        guard s.foundations.count == 4, s.tableau.count == 7,
-              s.drawCount == 1 || s.drawCount == 3,
+        guard s.foundations.count == 4, s.tableau.count == 8,
+              s.cells.count == FreeCellEngine.cellCount(hardCore: s.isHardCore),
+              FreeCellEngine.numbers.contains(s.number),
               !s.isWon, !FreeCellEngine.isWon(s),
-              s.moveCount >= 0, s.elapsed >= 0, s.elapsed.isFinite,
-              (0...s.moveCount).contains(s.redeals),            // each redeal is itself a move
-              s.undos >= 0,
-              s.passes <= s.maxPasses ?? .max                   // Hard Core: within its limit
+              s.moveCount >= 0, s.elapsed >= 0, s.elapsed.isFinite, s.undos >= 0
         else { return false }
-        let cards = s.stock + s.waste + s.foundations.flatMap { $0 } + s.tableau.flatMap { $0 }
+        let cards = s.cells.compactMap { $0 } + s.foundations.flatMap { $0 } + s.tableau.flatMap { $0 }
         guard cards.count == 52, cards.allSatisfy({ (1...13).contains($0.rank) }),
               Set(cards.map(\.id)).count == 52 else { return false }
-        guard s.stock.allSatisfy({ !$0.isFaceUp }), s.waste.allSatisfy(\.isFaceUp) else { return false }
         for f in s.foundations {
-            for (i, card) in f.enumerated() where !card.isFaceUp || card.rank != i + 1 || card.suit != f[0].suit {
-                return false
-            }
-        }
-        for column in s.tableau where !column.isEmpty {
-            guard let firstUp = column.firstIndex(where: \.isFaceUp),
-                  column[firstUp...].allSatisfy(\.isFaceUp) else { return false }   // last card face up
-            let run = column[firstUp...]
-            for (lower, upper) in zip(run, run.dropFirst())
-            where upper.rank != lower.rank - 1 || upper.suit.isRed == lower.suit.isRed {
+            for (i, card) in f.enumerated() where card.rank != i + 1 || card.suit != f[0].suit {
                 return false
             }
         }
@@ -91,15 +77,14 @@ enum SaveValidation {
 }
 
 /// What to do at launch: resume the saved game (when the player wants that and it is valid) or
-/// deal a fresh one in the remembered draw mode.
+/// deal a fresh one in the remembered mode.
 enum LaunchPlan: Equatable {
     case resume(GameState)
-    case deal(drawCount: Int, hardCore: Bool = false)
+    case deal(hardCore: Bool)
 
-    static func decide(saved: GameState?, resumePreferred: Bool, drawCount: Int,
-                       hardCore: Bool = false) -> LaunchPlan {
+    static func decide(saved: GameState?, resumePreferred: Bool, hardCore: Bool = false) -> LaunchPlan {
         if resumePreferred, let saved { return .resume(saved) }
-        return .deal(drawCount: GameStore.validDrawCount(drawCount), hardCore: hardCore)
+        return .deal(hardCore: hardCore)
     }
 }
 

@@ -38,8 +38,8 @@ import FreeCellEngine
     }
 
     /// The colour at a point of a card rendered in a style.
-    private func pixel(_ card: Card, _ style: CardStyle, at p: CGPoint) -> (r: Int, g: Int, b: Int)? {
-        let r = ImageRenderer(content: CardView(card: card, width: 100).environment(\.cardStyle, style))
+    private func pixel(_ card: Card, _ style: CardStyle, faceUp: Bool = true, at p: CGPoint) -> (r: Int, g: Int, b: Int)? {
+        let r = ImageRenderer(content: CardView(card: card, width: 100, faceUp: faceUp).environment(\.cardStyle, style))
         r.scale = 1
         guard let cg = r.cgImage, let data = cg.dataProvider?.data as Data? else { return nil }
         let bpp = cg.bitsPerPixel / 8
@@ -56,18 +56,18 @@ import FreeCellEngine
     /// Each face paints its paper (sampled left of centre, clear of the index and the suit).
     @Test(arguments: [(CardFaceStyle.bigIndex, UInt32(0xFFFFFF)), (.vintage, 0xFBF4E4), (.night, 0x262626)])
     func facesPaintTheirPaper(_ face: CardFaceStyle, _ paper: UInt32) {
-        let ace = Card(suit: .spades, rank: 1, isFaceUp: true)
+        let ace = Card(suit: .spades, rank: 1)
         #expect(near(pixel(ace, CardStyle(face: face), at: CGPoint(x: 12, y: 70)), paper))
     }
 
     /// Each back paints its panel (sampled near the panel's corner, between pattern lines).
     @Test(arguments: [(CardBackStyle.burntOrange, UInt32(0xCC5500)), (.racingGreen, 0x1F5E3A), (.artDeco, 0x1B2A4A)])
     func backsPaintTheirPanel(_ back: CardBackStyle, _ panel: UInt32) {
-        let down = Card(suit: .spades, rank: 1, isFaceUp: false)
+        let down = Card(suit: .spades, rank: 1)
         let style = CardStyle(back: back)
         // A few points on the panel; at least one falls between the pattern's lines.
         let points = [CGPoint(x: 50, y: 70), CGPoint(x: 52, y: 70), CGPoint(x: 50, y: 73), CGPoint(x: 55, y: 66)]
-        #expect(points.contains { near(pixel(down, style, at: $0), panel, 30) })
+        #expect(points.contains { near(pixel(down, style, faceUp: false, at: $0), panel, 30) })
     }
 
     /// A saved value the app doesn't know reads as no choice (the saved-setting path itself is
@@ -77,5 +77,16 @@ import FreeCellEngine
         #expect(CardBackStyle(rawValue: "tartan") == nil)
         #expect(CardFaceStyle.allCases.map(\.rawValue) == ["classic", "bigIndex", "vintage", "night"])
         #expect(CardStyle() == CardStyle(face: .classic, back: .classicBlue), "the original look by default")
+    }
+
+    /// FreeCell's suits are in Microsoft's order (♣ ♦ ♥ ♠), not Solitaire's: every card is drawn
+    /// and spoken with its own suit — looked up by suit, never by position.
+    @Test func everySuitIsDrawnAndSpokenAsItself() {
+        let expected: [(Suit, String, String)] = [(.clubs, "♣", "Clubs"), (.diamonds, "♦", "Diamonds"),
+                                                  (.hearts, "♥", "Hearts"), (.spades, "♠", "Spades")]
+        for (suit, symbol, name) in expected {
+            #expect(CardView.suitSymbol(suit) == symbol)
+            #expect(CardView.spokenName(Card(suit: suit, rank: 12)) == "Queen of \(name)")
+        }
     }
 }

@@ -3,11 +3,14 @@ import FreeCellEngine
 
 /// One card, drawn in SwiftUI (no images), in the face and back of the environment's `cardStyle`
 /// (spec "Card styles"): a rounded rectangle with a hairline border and a 1 pt shadow, the corner
-/// index top-left, a large suit below it; a back is a patterned panel inset in the card. Flipping
-/// rotates about the Y axis; faces never invert in dark mode.
+/// index top-left, a large suit below it; a back is a patterned panel inset in the card. FreeCell
+/// shows every card face up — only the Shuffle win animation turns them over (`faceUp`), rotating
+/// about the Y axis. Faces never invert in dark mode.
 struct CardView: View {
     let card: Card
     let width: CGFloat
+    /// False only for the Shuffle win animation's face-down deck.
+    var faceUp = true
     var isHighlighted = false
     /// False for cards buried in a stacked pile (stock, waste, foundation): only the top card casts
     /// a shadow, or 20 stacked shadows add up to a dark smear.
@@ -16,7 +19,7 @@ struct CardView: View {
     var isLifted = false
 
     var body: some View {
-        FlippingCard(angle: card.isFaceUp ? 0 : 180, card: card, width: width, hasShadow: hasShadow)
+        FlippingCard(angle: faceUp ? 0 : 180, card: card, width: width, hasShadow: hasShadow)
             .shadow(color: .black.opacity(isLifted ? 0.35 : 0), radius: isLifted ? 5 : 0, y: isLifted ? 3 : 0)
             .frame(width: width, height: width * BoardMetrics.aspect)
         .overlay {
@@ -25,20 +28,32 @@ struct CardView: View {
             }
         }
         .accessibilityElement()
-        .accessibilityLabel(card.isFaceUp ? Self.spokenName(card) : "Face-down card")
+        .accessibilityLabel(faceUp ? Self.spokenName(card) : "Face-down card")
     }
 
     nonisolated static func rankText(_ rank: Int) -> String {
         [1: "A", 11: "J", 12: "Q", 13: "K"][rank] ?? "\(rank)"
     }
 
+    /// By suit, not by position: FreeCell's suits are in Microsoft's order (♣ ♦ ♥ ♠), not Solitaire's.
     nonisolated static func suitSymbol(_ suit: Suit) -> String {
-        ["♠", "♥", "♦", "♣"][suit.rawValue]
+        switch suit {
+        case .clubs: "♣"
+        case .diamonds: "♦"
+        case .hearts: "♥"
+        case .spades: "♠"
+        }
     }
 
     nonisolated static func spokenName(_ card: Card) -> String {
         let rank = [1: "Ace", 11: "Jack", 12: "Queen", 13: "King"][card.rank] ?? "\(card.rank)"
-        return "\(rank) of \(["Spades", "Hearts", "Diamonds", "Clubs"][card.suit.rawValue])"
+        let suit = switch card.suit {
+        case .clubs: "Clubs"
+        case .diamonds: "Diamonds"
+        case .hearts: "Hearts"
+        case .spades: "Spades"
+        }
+        return "\(rank) of \(suit)"
     }
 }
 
@@ -232,11 +247,13 @@ private struct DiagonalPattern: Shape {
 struct PileOutline: View {
     let width: CGFloat
     var symbol: String?
+    /// A free cell Hard Core takes away: dimmer, darker, with its ✕.
+    var closed = false
 
     var body: some View {
         RoundedRectangle(cornerRadius: width * 0.09, style: .continuous)
-            .strokeBorder(Color.white.opacity(0.3), lineWidth: 1)
-            .background(RoundedRectangle(cornerRadius: width * 0.09).fill(Color.black.opacity(0.08)))
+            .strokeBorder(Color.white.opacity(closed ? 0.12 : 0.3), lineWidth: 1)
+            .background(RoundedRectangle(cornerRadius: width * 0.09).fill(Color.black.opacity(closed ? 0.22 : 0.08)))
             .overlay {
                 if let symbol {
                     Image(systemName: symbol)

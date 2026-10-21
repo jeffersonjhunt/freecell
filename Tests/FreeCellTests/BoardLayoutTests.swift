@@ -5,8 +5,9 @@ import Testing
 import FreeCellEngine
 @testable import FreeCell
 
-/// The board area (inside safe areas and the toolbar) for the spec's layout acceptance sizes.
-/// Derived from each device's points: screen − status bar/home indicator/side insets − toolbar.
+/// The board area (inside safe areas and the header and bar) for the spec's layout acceptance
+/// sizes. Derived from each device's points: screen − status bar/home indicator/side insets −
+/// the header and bar.
 enum BoardSize: String, CaseIterable {
     case iPhoneSEPortrait        // 375 × 667; status 20
     case iPhoneSELandscape       // 667 × 375
@@ -14,9 +15,9 @@ enum BoardSize: String, CaseIterable {
     case iPadThirdSplit          // 320-pt split column on an 11" iPad; status 24
     case mac600                  // the smallest Mac window (FreeCellApp.minimumWindow)
 
-    /// The board's space on each: the screen less direction A's header (48 pt) and bottom bar
-    /// (60 pt buttons + 16), and any safe-area insets — on a phone held sideways, only the shorter
-    /// bar the header folds into (52 + 16). The board runs edge to edge.
+    /// The board's space on each: the screen less the header (48 pt) and bottom bar (60 pt buttons
+    /// + 16), and any safe-area insets — on a phone held sideways, only the shorter bar the header
+    /// folds into (52 + 16). The board runs edge to edge.
     var size: CGSize {
         let chrome: CGFloat = 48 + 76
         let landscapeChrome: CGFloat = 52 + 16
@@ -32,118 +33,95 @@ enum BoardSize: String, CaseIterable {
     var isTouch: Bool { self != .mac600 }
 }
 
-/// A position with the tallest column the rules allow: 6 face-down cards under a full K→A run.
+/// The tallest column the spec asks for: six cards under a full K→A run — nineteen — with every
+/// free cell full.
 func worstCaseState() -> GameState {
-    let down = (2...7).map { Card(suit: .clubs, rank: $0, isFaceUp: false) }
-    let run = (1...13).reversed().map { rank in
-        Card(suit: rank % 2 == 1 ? .spades : .hearts, rank: rank, isFaceUp: true)
+    let run = (1...13).reversed().map { rank in Card(suit: rank % 2 == 1 ? .spades : .hearts, rank: rank) }
+    let used = Set(run)
+    var rest = Suit.allCases.flatMap { s in (1...13).map { Card(suit: s, rank: $0) } }.filter { !used.contains($0) }
+    let under = Array(rest.prefix(6)); rest.removeFirst(6)
+    let cells: [Card?] = Array(rest.prefix(4)); rest.removeFirst(4)
+    var columns: [[Card]] = [under + run]
+    for t in 1..<8 {                                                  // the other 29: 5, then 4 each
+        let take = t == 1 ? 5 : 4
+        columns.append(Array(rest.prefix(take)))
+        rest.removeFirst(take)
     }
-    var s = FreeCellEngine.newGame(drawCount: 3, seed: 1)
-    s.tableau = [[], [], [], [], [], [], down + run]
-    s.stock = []
-    s.waste = []
-    return s
+    precondition(rest.isEmpty && columns.joined().count + 4 == 52)
+    return GameState(cells: cells, foundations: [[], [], [], []], tableau: columns, number: 1)
 }
 
 @Suite struct Metrics {
     @Test func followsTheSpecRatios() {
         let m = BoardMetrics(size: CGSize(width: 700, height: 2000), isTouch: false)
         #expect(abs(m.gap - 700 * 0.018) < 0.001)
-        #expect(abs(m.cardWidth - (700 - 8 * m.gap) / 7) < 0.001)
+        #expect(abs(m.cardWidth - (700 - 9 * m.gap) / 8) < 0.001, "eight columns, seven gaps and two margins")
         #expect(abs(m.cardHeight - m.cardWidth * 1.4) < 0.001)
         #expect(abs(m.cornerRadius - m.cardWidth * 0.09) < 0.001)
-        #expect(abs(m.faceDownFan - m.cardHeight * 0.12) < 0.001)
-        #expect(abs(m.faceUpFan - m.cardHeight * 0.29) < 0.001)
+        #expect(abs(m.fan - m.cardHeight * 0.29) < 0.001)
         #expect(!m.isCompressed)
     }
 
     @Test func boardWidthIsCappedAt900AndCentred() {
         let m = BoardMetrics(size: CGSize(width: 2000, height: 4000), isTouch: false)
-        #expect(abs(m.cardWidth - (900 - 8 * 900 * 0.018) / 7) < 0.001)
+        #expect(abs(m.cardWidth - (900 - 9 * 900 * 0.018) / 8) < 0.001)
         #expect(abs(m.leftEdge - (2000 - m.usedWidth) / 2) < 0.001)
     }
 
-    /// Boards 500 pt and wider: gaps are 1.8 % of the width but never under 4 pt, margins equal to them.
     @Test func wideBoardGapsNeverBelowFourPoints() {
         let m = BoardMetrics(size: CGSize(width: 520, height: 2000), isTouch: false)
         #expect(m.gap == 520 * 0.018 || m.gap == 4)
         #expect(m.gap >= 4 && m.margin == m.gap)
     }
 
-    /// Direction A: phone-width boards use 3 pt gaps inside 4 pt margins, for bigger cards.
+    /// Phone-width boards use 3 pt gaps inside 4 pt margins, for bigger cards.
     @Test func narrowBoardsUseTightGutters() {
         let m = BoardMetrics(size: CGSize(width: 390, height: 640), isTouch: true)
         #expect(m.gap == 3 && m.margin == 4)
-        #expect(abs(m.cardWidth - (390 - 2 * 4 - 6 * 3) / 7) < 0.001)
+        #expect(abs(m.cardWidth - (390 - 2 * 4 - 7 * 3) / 8) < 0.001)
         #expect(abs(m.leftEdge - 4) < 0.001, "the outer columns sit 4 pt from the edges")
     }
 
-    /// The space under the top row is 0.8 × card width (portrait phones and the Mac alike).
-    @Test(arguments: [(CGSize(width: 390, height: 640), true), (CGSize(width: 1000, height: 640), false)])
-    func rowGapIsEightyPercentOfACardWidth(_ size: CGSize, _ touch: Bool) {
-        let m = BoardMetrics(size: size, isTouch: touch)
-        #expect(m.rowGapCap == nil)
-        #expect(abs(m.tableauY - (m.topRowY + m.cardHeight) - 0.8 * m.cardWidth) < 0.001)
+    /// The space under the top row is 0.3 × card width, at most 16 pt.
+    @Test(arguments: [CGSize(width: 390, height: 640), CGSize(width: 1000, height: 2000)])
+    func rowGapIsThirtyPercentOfACardWidthAtMost16(_ size: CGSize) {
+        let m = BoardMetrics(size: size, isTouch: false)
+        #expect(abs(m.tableauY - (m.topRowY + m.cardHeight) - min(0.3 * m.cardWidth, 16)) < 0.001)
     }
 
-    /// The smallest Mac window keeps cards about 50 pt wide (review R3; at 420 pt tall they were ~37).
-    @Test func theSmallestMacWindowKeepsCardsLarge() {
-        #expect(BoardMetrics(size: BoardSize.mac600.size, isTouch: false).cardWidth >= 50)
+    /// The smallest Mac window keeps cards at least 40 pt wide (eight columns and a twelve-card
+    /// column to fit in 520 pt).
+    @Test func theSmallestMacWindowKeepsCardsReadable() {
+        #expect(BoardMetrics(size: BoardSize.mac600.size, isTouch: false).cardWidth >= 40)
     }
 
-    /// The chip shows this game's mode and offers the other (spec "New games and the draw mode").
-    @Test func drawChipShowsThisGamesModeAndOffersTheOther() {
-        #expect(GameHeader.drawChip(current: 1) == ("DRAW 1", "Draw one", "Switches to Draw 3 and starts a new game", 3))
-        #expect(GameHeader.drawChip(current: 3) == ("DRAW 3", "Draw three", "Switches to Draw 1 and starts a new game", 1))
-        #expect(GameHeader.drawChip(current: 1, hardCore: true).text == "DRAW 1 · HC")
-        #expect(GameHeader.drawChip(current: 1, hardCore: true).spoken == "Draw one, Hard Core")
+    /// The chip shows this game's number and Hard Core (spec "Layout and visuals").
+    @Test func theGameChipShowsTheNumber() {
+        #expect(GameHeader.gameChip(number: 24301) == ("#24301", "Game 24301"))
+        #expect(GameHeader.gameChip(number: 24301, hardCore: true) == ("#24301 · HC", "Game 24301, Hard Core"))
     }
 
-    /// A touch board held sideways caps that space at 16 pt — height is what limits its cards.
-    @Test func landscapeTouchBoardsCapTheRowGap() {
-        let m = BoardMetrics(size: BoardSize.iPhoneProMaxLandscape.size, isTouch: true)
-        #expect(m.rowGapCap == 16)
-        #expect(abs(m.rowGap - min(0.8 * m.cardWidth, 16)) < 0.001)
-        #expect(m.tableauY - (m.topRowY + m.cardHeight) <= 16 + 0.001)
-        let mouse = BoardMetrics(size: BoardSize.iPhoneProMaxLandscape.size, isTouch: false)
-        #expect(mouse.rowGapCap == nil, "a Mac window is not a device held sideways")
-    }
-
-    /// Decision D1: on short, wide boards cards are capped so a column of six face-down cards under
-    /// a K→5 run keeps readable fans; a fresh deal is never squeezed.
-    @Test(arguments: [BoardSize.iPhoneProMaxLandscape, .mac600])
+    /// On short, wide boards cards are capped so a twelve-card column keeps a readable fan; a fresh
+    /// deal is never squeezed.
+    @Test(arguments: [BoardSize.iPhoneProMaxLandscape, .iPhoneSELandscape, .mac600])
     func shortWideBoardsCapTheCardSizeByHeight(_ board: BoardSize) {
         let size = board.size
         let m = BoardMetrics(size: size, isTouch: board.isTouch)
-        let byWidth = (min(size.width, 900) - 2 * m.margin - 6 * m.gap) / 7
+        let byWidth = (min(size.width, 900) - 2 * m.margin - 7 * m.gap) / 8
         #expect(m.cardWidth < byWidth, "the height cap should bind here")
-        // A real column: six face-down cards under K→5 (nine face-up cards, eight fan steps).
-        var s = FreeCellEngine.newGame(drawCount: 1, seed: 1)
-        let down = (2...7).map { Card(suit: .clubs, rank: $0, isFaceUp: false) }
-        let run = (5...13).reversed().map { Card(suit: $0 % 2 == 1 ? .spades : .hearts, rank: $0, isFaceUp: true) }
-        s.tableau = [[], [], [], [], [], [], down + run]
-        let column = BoardLayout(state: s, metrics: m).placements.filter { $0.pile == .tableau(6) }
-        let upSteps = zip(column.dropFirst(6), column.dropFirst(7)).map { $1.frame.minY - $0.frame.minY }
-        #expect(upSteps.count == 8)
-        #expect(upSteps.allSatisfy { $0 >= m.cardHeight * BoardMetrics.readableFanRatio - 0.01 },
-                "K→5 stays readable: \(upSteps.first ?? 0) vs \(m.cardHeight * BoardMetrics.readableFanRatio)")
-        // …and the cap is no tighter than that: a K→4 run is already squeezed below readable.
-        let longer = (4...13).reversed().map { Card(suit: $0 % 2 == 1 ? .spades : .hearts, rank: $0, isFaceUp: true) }
-        s.tableau[6] = down + longer
-        let tight = BoardLayout(state: s, metrics: m).placements.filter { $0.pile == .tableau(6) }
-        #expect(tight[8].frame.minY - tight[7].frame.minY < m.cardHeight * BoardMetrics.readableFanRatio)
-        #expect(m.fans(faceDown: 6, faceUp: 0) == (m.faceDownFan, m.faceUpFan), "a fresh deal is not squeezed")
+        #expect(m.fan(forColumnOf: 12) >= m.cardHeight * BoardMetrics.readableFanRatio - 0.01, "twelve stay readable")
+        #expect(m.fan(forColumnOf: 13) < m.cardHeight * BoardMetrics.readableFanRatio, "…and the cap is no tighter")
+        #expect(m.fan(forColumnOf: 7) == m.fan, "a fresh deal is not squeezed")
     }
 
-    /// Where height is plentiful (portrait phones, iPads) the cap never binds: the spec's width rule wins.
+    /// Where height is plentiful (portrait phones, iPads) the cap never binds: the width rule wins.
     @Test(arguments: [BoardSize.iPhoneSEPortrait, .iPadThirdSplit])
     func tallBoardsKeepTheWidthRule(_ board: BoardSize) {
         let m = BoardMetrics(size: board.size, isTouch: board.isTouch)
-        #expect(abs(m.cardWidth - (min(board.size.width, 900) - 2 * m.margin - 6 * m.gap) / 7) < 0.001)
+        #expect(abs(m.cardWidth - (min(board.size.width, 900) - 2 * m.margin - 7 * m.gap) / 8) < 0.001)
     }
 
-    /// Decision D2: touch cards narrower than 44 pt widen their hit area to the whole column slot
-    /// (on a phone-width board the gaps are already at their tightest, 3 pt).
+    /// Touch cards narrower than 44 pt widen their hit area to the whole column slot.
     @Test func narrowTouchBoardsAreCompressedWithFullHitTargets() {
         let touch = BoardMetrics(size: BoardSize.iPadThirdSplit.size, isTouch: true)
         #expect(touch.isCompressed && touch.gap == 3)
@@ -161,33 +139,58 @@ func worstCaseState() -> GameState {
 
     @Test func fansShrinkOnlyWhenAColumnWouldOverflow() {
         let m = BoardMetrics(size: CGSize(width: 700, height: 700), isTouch: false)
-        #expect(m.fans(faceDown: 1, faceUp: 1) == (m.faceDownFan, m.faceUpFan))
-        let squeezed = m.fans(faceDown: 6, faceUp: 12)
-        #expect(squeezed.up < m.faceUpFan && squeezed.down < m.faceDownFan)
-        #expect(abs(squeezed.up / squeezed.down - 0.29 / 0.12) < 0.001, "scaled together")
+        #expect(m.fan(forColumnOf: 2) == m.fan)
+        #expect(m.fan(forColumnOf: 19) < m.fan)
+        #expect(m.fan(forColumnOf: 1) == m.fan && m.fan(forColumnOf: 0) == m.fan)
+    }
+}
+
+@Suite struct TopRow {
+    let m = BoardMetrics(size: CGSize(width: 800, height: 900), isTouch: false)
+
+    /// Free cells in columns 1–4, foundations in 5–8 (spec "Top row").
+    @Test func cellsLeftFoundationsRight() {
+        let l = BoardLayout(state: FreeCellEngine.newGame(number: 617), metrics: m)
+        for i in 0..<4 {
+            #expect(l.slot(.cell(i)).minX == m.columnX(i) && l.slot(.cell(i)).minY == m.topRowY)
+            #expect(l.slot(.foundation(i)).minX == m.columnX(4 + i) && l.slot(.foundation(i)).minY == m.topRowY)
+        }
+        #expect(l.cellCount == 4 && l.dropPiles.count == 4 + 4 + 8)
+    }
+
+    /// Hard Core has two cells: the other two slots are drawn closed and take no drops.
+    @Test func hardCoreHasTwoOpenCells() {
+        let l = BoardLayout(state: FreeCellEngine.newGame(number: 617, hardCore: true), metrics: m)
+        #expect(l.cellCount == 2 && l.dropPiles.filter { if case .cell = $0 { true } else { false } }.count == 2)
+    }
+
+    /// A free cell's card sits on its cell.
+    @Test func aCellsCardSitsOnIt() {
+        var s = FreeCellEngine.newGame(number: 617)
+        let moved = s.tableau[2].removeLast()
+        s.cells[2] = moved
+        let l = BoardLayout(state: s, metrics: m)
+        #expect(l.placements.first { $0.card == moved }?.frame == l.slot(.cell(2)))
     }
 }
 
 /// Acceptance: the board lays out without clipping on iPhone SE portrait, iPhone Pro Max
-/// landscape, iPad split view at one third, and a 600 pt wide Mac window.
+/// landscape, iPad split view at one third, and a 600 pt wide Mac window — with a 19-card column.
 @Suite struct NoClipping {
-    @Test(arguments: BoardSize.allCases, DrawPileSide.allCases)
-    func everyCardFitsTheBoard(_ board: BoardSize, _ side: DrawPileSide) {
+    @Test(arguments: BoardSize.allCases)
+    func everyCardFitsTheBoard(_ board: BoardSize) {
         let m = BoardMetrics(size: board.size, isTouch: board.isTouch)
-        for (name, state) in [("deal", FreeCellEngine.newGame(drawCount: 3, seed: 4)), ("worst", worstCaseState())] {
-            var s = state
-            if name == "deal" { FreeCellEngine.drawFromStock(&s) }   // three cards on the waste, fanned
-            let layout = BoardLayout(state: s, metrics: m, side: side)
+        for (name, s) in [("deal", FreeCellEngine.newGame(number: 617)), ("worst", worstCaseState())] {
+            let layout = BoardLayout(state: s, metrics: m)
             let bounds = CGRect(origin: .zero, size: board.size).insetBy(dx: -0.001, dy: -0.001)
             for p in layout.placements {
                 #expect(bounds.contains(p.frame), "\(board) \(name): \(p.card.id) at \(p.frame)")
             }
-            // The top row and the tableau never overlap.
             let topRowBottom = m.topRowY + m.cardHeight
             #expect(layout.placements.filter { if case .tableau = $0.pile { true } else { false } }
-                .allSatisfy { $0.frame.minY >= topRowBottom })
+                .allSatisfy { $0.frame.minY >= topRowBottom }, "the top row and the columns never overlap")
         }
-        #expect(m.cardWidth >= 30, "\(board): cards too small to read (\(m.cardWidth) pt)")
+        #expect(m.cardWidth >= 28, "\(board): cards too small to read (\(m.cardWidth) pt)")
     }
 }
 
@@ -196,11 +199,8 @@ func worstCaseState() -> GameState {
 @MainActor @Suite struct Snapshots {
     @Test(arguments: BoardSize.allCases)
     func renderBoard(_ board: BoardSize) throws {
-        for (name, state) in [("deal", FreeCellEngine.newGame(drawCount: 3, seed: 4)), ("worst", worstCaseState())] {
-            var s = state
-            if name == "deal" { FreeCellEngine.drawFromStock(&s) }
-            let store = GameStore(drawCount: 3) { 4 }
-            store.resume(from: s)
+        for (name, s) in [("deal", FreeCellEngine.newGame(number: 617)), ("worst", worstCaseState())] {
+            let store = makeStore(at: s)
             let view = BoardView(store: store)
                 .frame(width: board.size.width, height: board.size.height)
                 .background(TableBackground())
@@ -226,43 +226,37 @@ func worstCaseState() -> GameState {
 @MainActor @Suite struct MovingCards {
     /// A card on its way to another pile is drawn above every other card, so it never slides under
     /// a deeper column during the animation.
-    @Test func movedCardsAreRaisedAboveEverything() throws {
-        let store = GameStore(drawCount: 1) { 4 }
-        let move = try #require(legalMoves(store.state).first {
-            FreeCellEngine.autoDestination(for: $0.source, index: $0.index, in: store.state) != nil })
-        let card = store.state[move.source][move.index]
-        #expect(store.tap(pile: move.source, index: move.index))
-        #expect(store.movedCardIDs.contains(card.id))
+    @Test func movedCardsAreRaisedAboveEverything() {
+        let store = makeStore(at: position(columns: [cards("KD 5H"), cards("6C"), cards("QS JH TS")]))
+        #expect(store.tap(pile: .tableau(0), index: 1))
+        let moved = card("5H")
+        #expect(store.movedCardIDs.contains(moved.id))
         let m = BoardMetrics(size: CGSize(width: 800, height: 900), isTouch: false)
         let layout = BoardLayout(state: store.state, metrics: m, raised: store.movedCardIDs)
-        let moved = try #require(layout.placements.first { $0.card.id == card.id })
-        let others = layout.placements.filter { !store.movedCardIDs.contains($0.card.id) }
-        #expect(others.allSatisfy { $0.zIndex < moved.zIndex })
+        let placed = layout.placements.first { $0.card == moved }!
+        #expect(layout.placements.filter { !store.movedCardIDs.contains($0.card.id) }.allSatisfy { $0.zIndex < placed.zIndex })
     }
 
-    /// Within every pile, later cards are always drawn above earlier ones — after a move, a draw, a
-    /// new deal and a resume alike (a per-card raise once buried unmoved cards mid-pile).
+    /// Within every pile, later cards are always drawn above earlier ones — after a move, a new
+    /// deal and a resume alike.
     @Test func cardsStayInOrderWithinEveryPile() {
-        let store = GameStore(drawCount: 3) { 4 }
+        let store = makeStore()
         let m = BoardMetrics(size: CGSize(width: 800, height: 900), isTouch: false)
         func check(_ when: String) {
             let layout = BoardLayout(state: store.state, metrics: m, raised: store.movedCardIDs)
-            let byPile = Dictionary(grouping: layout.placements, by: \.pile)
-            for (pile, cards) in byPile {
-                let z = cards.sorted { $0.index < $1.index }.map(\.zIndex)
+            for (pile, placed) in Dictionary(grouping: layout.placements, by: \.pile) {
+                let z = placed.sorted { $0.index < $1.index }.map(\.zIndex)
                 #expect(z == z.sorted() && Set(z).count == z.count, "\(when): \(pile) out of order")
             }
         }
-        store.tapStock(); check("draw")
-        if let m = legalMoves(store.state).first { store.drop(source: m.source, index: m.index, on: m.destination) }
-        check("move")
-        store.newGame(drawCount: 3); check("new deal")
+        playAMove(store); check("move")
+        store.newGame(); check("new deal")
         store.resume(from: worstCaseState()); check("resume")
     }
 
     @Test func theClockTickDoesNotLowerAMovingCard() {
-        let store = GameStore(drawCount: 1) { 4 }
-        store.tapStock()
+        let store = makeStore()
+        playAMove(store)
         let moved = store.movedCardIDs
         #expect(!moved.isEmpty)
         store.tick()
@@ -276,38 +270,36 @@ func worstCaseState() -> GameState {
         return Dictionary(uniqueKeysWithValues: layout.placements.map { ($0.card.id, CardAccessibility.of($0, in: s)) })
     }
 
-    @Test func buriedCardsAreHiddenAndTheStockIsNotReadCardByCard() {
-        var s = FreeCellEngine.newGame(drawCount: 1, seed: 4)
-        FreeCellEngine.drawFromStock(&s)
-        FreeCellEngine.drawFromStock(&s)
+    /// Every column card is read (all are face up), with its column; only cards a tap would move
+    /// are buttons.
+    @Test func everyColumnCardIsReadAndOnlyMovableCardsAreButtons() {
+        let s = FreeCellEngine.newGame(number: 617)
         let r = roles(s)
-        #expect(s.stock.allSatisfy { r[$0.id] == .hidden })
-        #expect(r[s.waste[0].id] == .hidden, "a buried waste card")
-        #expect(r[s.waste[1].id] != .hidden, "the waste top")
-        #expect(s.tableau.flatMap { $0 }.filter { !$0.isFaceUp }.allSatisfy { r[$0.id] == .hidden })
-    }
-
-    @Test func columnsSayWhatIsHiddenAndOnlyPlayableCardsAreButtons() {
-        let s = FreeCellEngine.newGame(drawCount: 1, seed: 4)
-        let r = roles(s)
-        let top6 = s.tableau[6].last!
-        #expect(r[top6.id]!.text.hasSuffix("column 7, 6 face-down cards under it"))
-        #expect(r[s.tableau[0].last!.id]!.text.hasSuffix("column 1"))
-        for t in 0..<7 {
-            let card = s.tableau[t].last!
-            let playable = FreeCellEngine.autoDestination(for: .tableau(t), index: s.tableau[t].count - 1, in: s) != nil
-            #expect(r[card.id]!.isButton == playable)
+        #expect(s.tableau.flatMap { $0 }.allSatisfy { r[$0.id] != .hidden })
+        #expect(r[s.tableau[0].last!.id]!.text == "\(CardView.spokenName(s.tableau[0].last!)), column 1")
+        for t in 0..<8 {
+            for (i, c) in s.tableau[t].enumerated() {
+                let movable = FreeCellEngine.autoDestination(for: .tableau(t), index: i, in: s) != nil
+                #expect(r[c.id]!.isButton == movable)
+            }
         }
     }
 
+    @Test func aFreeCellsCardSaysWhereItIs() {
+        var s = FreeCellEngine.newGame(number: 617)
+        let held = s.tableau[0].removeLast()
+        s.cells[1] = held
+        #expect(roles(s)[held.id]!.text == "\(CardView.spokenName(held)), free cell 2")
+    }
+
     @Test func foundationTopIsNamedButNotAButton() {
-        var s = FreeCellEngine.newGame(drawCount: 1, seed: 4)
-        s.foundations[0] = [Card(suit: .hearts, rank: 1, isFaceUp: true), Card(suit: .hearts, rank: 2, isFaceUp: true)]
-        s.tableau = s.tableau.map { $0.filter { !($0.suit == .hearts && $0.rank <= 2) } }
-        s.stock.removeAll { $0.suit == .hearts && $0.rank <= 2 }
+        var s = FreeCellEngine.newGame(number: 617)
+        let home = [Card(suit: .hearts, rank: 1), Card(suit: .hearts, rank: 2)]
+        s.tableau = s.tableau.map { $0.filter { !home.contains($0) } }
+        s.foundations[0] = home
         let r = roles(s)
-        #expect(r[Card(suit: .hearts, rank: 2).id] == .label("2 of Hearts, foundation 1"))
-        #expect(r[Card(suit: .hearts, rank: 1).id] == .hidden)
+        #expect(r[home[1].id] == .label("2 of Hearts, foundation 1"))
+        #expect(r[home[0].id] == .hidden)
     }
 }
 
@@ -366,7 +358,7 @@ func worstCaseState() -> GameState {
     }
 
     func fullFoundations() -> [[Card]] {
-        [Suit.spades, .hearts, .diamonds, .clubs].map { s in (1...13).map { Card(suit: s, rank: $0, isFaceUp: true) } }
+        [Suit.spades, .hearts, .diamonds, .clubs].map { s in (1...13).map { Card(suit: s, rank: $0) } }
     }
 
     @Test func kingsLeaveFirstAndThePilesEmpty() {
@@ -467,69 +459,3 @@ func worstCaseState() -> GameState {
     }
 }
 
-/// Spec "Top row": the draw pile on the left (default) or the right, where the top row mirrors —
-/// foundations in columns 0–3, waste 5, stock 6 — and the tableau stays put.
-@Suite struct DrawPileSides {
-    let m = BoardMetrics(size: CGSize(width: 800, height: 900), isTouch: false)
-
-    /// A Draw 3 game with five cards on the waste: two buried, three fanned.
-    func fiveOnTheWaste() -> GameState {
-        var s = FreeCellEngine.newGame(drawCount: 3, seed: 4)
-        s.waste = Array(s.stock.suffix(5)).map { var c = $0; c.isFaceUp = true; return c }
-        s.stock.removeLast(5)
-        return s
-    }
-
-    @Test func leftIsTheDefaultLayout() {
-        let s = fiveOnTheWaste()
-        #expect(BoardLayout(state: s, metrics: m) == BoardLayout(state: s, metrics: m, side: .left))
-        let l = BoardLayout(state: s, metrics: m)
-        #expect(l.slot(.stock).minX == m.columnX(0) && l.slot(.waste).minX == m.columnX(1))
-        #expect((0..<4).allSatisfy { l.slot(.foundation($0)).minX == m.columnX(3 + $0) })
-    }
-
-    @Test func onTheRightTheTopRowMirrorsAndTheTableauStays() {
-        let s = fiveOnTheWaste()
-        let r = BoardLayout(state: s, metrics: m, side: .right)
-        let l = BoardLayout(state: s, metrics: m, side: .left)
-        #expect(r.slot(.stock).minX == m.columnX(6) && r.slot(.waste).minX == m.columnX(5))
-        #expect((0..<4).allSatisfy { r.slot(.foundation($0)).minX == m.columnX($0) }, "foundation 1 leftmost")
-        #expect([r.slot(.stock), r.slot(.waste)].allSatisfy { $0.minY == m.topRowY })
-        let tableau = { (b: BoardLayout) in b.placements.filter { if case .tableau = $0.pile { true } else { false } } }
-        #expect(tableau(r) == tableau(l), "the columns don't move")
-    }
-
-    /// On the right the playable card stays on the waste's slot, next to the stock; the two below
-    /// it step left by 0.3 × width (so their corner index shows), and buried cards sit under the
-    /// bottom of the fan. The fan stays inside the empty column, clear of the foundations.
-    @Test func theDrawThreeFanOpensIntoTheEmptyColumn() {
-        let s = fiveOnTheWaste()
-        let step = m.cardWidth * 0.3
-        let r = BoardLayout(state: s, metrics: m, side: .right)
-        let rw = r.placements.filter { $0.pile == .waste }.sorted { $0.index < $1.index }
-        let slot = r.slot(.waste).minX
-        #expect(rw.map(\.frame.minX) == [slot - 2 * step, slot - 2 * step, slot - 2 * step, slot - step, slot])
-        #expect(rw.map(\.isExposed) == [false, false, true, true, true])
-        #expect(rw.allSatisfy { $0.frame.minX >= r.slot(.foundation(3)).maxX }, "clear of foundation 4")
-        #expect(rw.last!.zIndex > rw[3].zIndex, "the playable card is on top")
-
-        let l = BoardLayout(state: s, metrics: m, side: .left)
-        let lw = l.placements.filter { $0.pile == .waste }.sorted { $0.index < $1.index }
-        let lslot = l.slot(.waste).minX
-        #expect(lw.map(\.frame.minX) == [lslot, lslot, lslot, lslot + step, lslot + 2 * step])
-        #expect(lw.allSatisfy { $0.frame.maxX <= l.slot(.foundation(0)).minX }, "clear of foundation 1")
-    }
-
-    @Test func dropsLandOnTheMirroredFoundations() {
-        let r = BoardLayout(state: fiveOnTheWaste(), metrics: m, side: .right)
-        for f in 0..<4 {
-            let slot = r.slot(.foundation(f))
-            #expect(r.dropTarget(for: CGPoint(x: slot.midX, y: slot.midY)) == .foundation(f))
-        }
-    }
-
-    @Test func anUnknownSavedSideReadsAsLeft() {
-        #expect(DrawPileSide(rawValue: "sideways") == nil)
-        #expect(DrawPileSide.allCases.map(\.rawValue) == ["left", "right"])
-    }
-}

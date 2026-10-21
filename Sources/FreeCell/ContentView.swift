@@ -1,18 +1,20 @@
 import SwiftUI
 import FreeCellEngine
 
-/// The whole window, the same on every platform (direction A): the green table, the header with
-/// moves and time, the board, the four-button bar along the bottom, and on a win the cascade
-/// plus the win sheet with the move count and time.
+/// The whole window, the same on every platform: the green table, the header with time, moves and
+/// the game chip, the board, the bar along the bottom, and on a win its animation plus the win
+/// card with the time and moves.
 struct ContentView: View {
     let store: GameStore
     let ui: AppUI
     let scores: ScoreBook
     let gameCenter: GameCenter
-    @State private var dismissedWinSeed: UInt64?
-    /// The win whose cascade has finished; the win sheet waits for it, so the cascade plays uncovered.
-    @State private var cascadeFinishedSeed: UInt64?
-    /// The width the seven columns actually use, so the header lines up with the cards.
+    /// The deal whose win card was closed (by the store's deal identity: a restarted game is a new
+    /// deal of the same number, and its win shows the card again).
+    @State private var dismissedWinDeal: UUID?
+    /// The deal whose win animation has finished; the win card waits for it, so it plays uncovered.
+    @State private var animationFinishedDeal: UUID?
+    /// The width the eight columns actually use, so the header lines up with the cards.
     @State private var boardWidth: CGFloat?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.accessibilityVoiceOverEnabled) private var voiceOver
@@ -21,7 +23,6 @@ struct ContentView: View {
     #endif
     @AppStorage(AppSettings.cardFaceKey, store: AppSettings.defaults) private var cardFace = CardFaceStyle.classic
     @AppStorage(AppSettings.cardBackKey, store: AppSettings.defaults) private var cardBack = CardBackStyle.classicBlue
-    @AppStorage(AppSettings.drawPileSideKey, store: AppSettings.defaults) private var drawPileSide = DrawPileSide.left
     @AppStorage(AppSettings.winAnimationKey, store: AppSettings.defaults) private var winAnimation = WinAnimation.cascade
     #if os(iOS)
     @Environment(\.verticalSizeClass) private var verticalSizeClass
@@ -35,7 +36,7 @@ struct ContentView: View {
     var body: some View {
         VStack(spacing: 0) {
             if !shortScreen { GameHeader(store: store, ui: ui, width: boardWidth) }
-            BoardView(store: store) { cascadeFinishedSeed = store.state.seed }   // draws the win cascade itself
+            BoardView(store: store) { animationFinishedDeal = store.dealID }   // draws the win animation itself
                 .onGeometryChange(for: CGFloat.self) { [isTouch = BoardView.isTouch] proxy in
                     BoardMetrics(size: proxy.size, isTouch: isTouch).usedWidth
                 } action: { boardWidth = $0 }
@@ -43,17 +44,15 @@ struct ContentView: View {
         }
         .background(TableBackground().ignoresSafeArea())
         .environment(\.cardStyle, CardStyle(face: cardFace, back: cardBack))
-        .environment(\.drawPileSide, drawPileSide)
         .environment(\.winAnimation, playedAnimation)
         #if os(macOS)
         .background(QuitWhenClosed())
         #endif
         #if os(iOS)
-        // Haptics, iOS and iPadOS only: light on a move, soft on a draw, success on a win.
+        // Haptics, iOS and iPadOS only: light on a move, success on a win.
         .sensoryFeedback(trigger: store.feedback) { _, event in
             switch event?.kind {
             case .move: .impact(weight: .light)
-            case .draw: .impact(flexibility: .soft)
             case .win: .success
             case nil: nil
             }
@@ -76,7 +75,7 @@ struct ContentView: View {
             }
         }
         .sheet(isPresented: Binding(get: { ui.showingScores }, set: { ui.showingScores = $0 })) {
-            ScoresView(scores: scores, gameCenter: gameCenter, drawCount: store.state.drawCount) {
+            ScoresView(scores: scores, gameCenter: gameCenter) {
                 ui.showingScores = false
             }
             .presentationBackground(DialogColors.card)
@@ -92,10 +91,25 @@ struct ContentView: View {
             }
         }
         #endif
-        // New Game, the draw chip and the menus ask here before losing a game in progress; the
-        // win card follows the cascade. Both are dark cards over the dimmed table.
+        // New Game, Hard Core, Restart and the menus ask here before losing a game in progress;
+        // Choose a game opens here; the win card follows the win animation. All are dark cards
+        // over the dimmed table.
         .overlay {
-            if let request = ui.pendingNewGame {
+            if ui.choosingGame {
+                DialogScrim(bottom: !wideDialogs, maxWidth: 480, outside: { ui.choosingGame = false }) {
+                    ChooseGameCard(inProgress: store.isInProgress,
+                                   play: { number in
+                                       ui.choosingGame = false
+                                       ui.requestNewGame(number: number, confirmed: true, store: store)
+                                   },
+                                   random: {
+                                       ui.choosingGame = false
+                                       ui.requestNewGame(confirmed: true, store: store)
+                                   },
+                                   cancel: { ui.choosingGame = false })
+                }
+                .transition(.opacity)
+            } else if let request = ui.pendingNewGame {
                 DialogScrim(outside: { ui.pendingNewGame = nil }) {
                     QuestionCard(request: request, cancel: { ui.pendingNewGame = nil }) {
                         ui.confirmPending(store: store)
@@ -104,14 +118,14 @@ struct ContentView: View {
                 .transition(.opacity)
             } else if winSheetShown.wrappedValue {
                 DialogScrim(bottom: !wideDialogs, maxWidth: 480) {
-                    WinCard(drawCount: store.state.drawCount, hardCore: store.state.isHardCore,
-                            score: store.score, playScore: store.playScore, timeBonus: store.timeBonus,
-                            moves: store.state.moveCount,
-                            elapsed: store.state.elapsed, passes: store.state.passes,
-                            undos: store.state.undos, topTenRank: scores.rank(ofWin: store.state),
+                    WinCard(number: store.state.number, hardCore: store.state.isHardCore,
+                            moves: store.state.moveCount, elapsed: store.state.elapsed,
+                            undos: store.state.undos, freeCells: store.state.cells.count,
+                            wins: scores.wins.total, topTenRank: scores.rank(ofWin: store.state),
                             wide: wideDialogs, showTopTen: showScores,
-                            newGame: { store.newGame(drawCount: $0) },
-                            close: { dismissedWinSeed = store.state.seed })
+                            newGame: { store.newGame() },
+                            chooseGame: { ui.choosingGame = true },
+                            close: { dismissedWinDeal = store.dealID })
                 }
                 .transition(.opacity)
             } else if ui.showingMore {
@@ -122,6 +136,7 @@ struct ContentView: View {
             }
         }
         .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: ui.pendingNewGame)
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: ui.choosingGame)
         .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: ui.showingMore)
         .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: winSheetShown.wrappedValue)
         .onChange(of: winSheetShown.wrappedValue, initial: true) { _, shown in ui.showingWinCard = shown }
@@ -131,7 +146,7 @@ struct ContentView: View {
     /// The win animation this game plays: the chosen one, Random settled for this deal — or none
     /// (None, or Reduce Motion), in which case the win card comes at once.
     private var playedAnimation: WinAnimation? {
-        reduceMotion ? nil : winAnimation.resolved(seed: store.state.seed)
+        reduceMotion ? nil : winAnimation.resolved(seed: UInt64(truncatingIfNeeded: store.dealID.hashValue))
     }
 
     /// Scores: a sheet on iPhone and iPad, its window on the Mac.
@@ -156,11 +171,11 @@ struct ContentView: View {
     private var winSheetShown: Binding<Bool> {
         Binding(
             get: {
-                Self.showsWinSheet(isWon: store.state.isWon, dismissed: dismissedWinSeed == store.state.seed,
-                                   cascadeFinished: cascadeFinishedSeed == store.state.seed,
+                Self.showsWinSheet(isWon: store.state.isWon, dismissed: dismissedWinDeal == store.dealID,
+                                   cascadeFinished: animationFinishedDeal == store.dealID,
                                    reduceMotion: playedAnimation == nil, voiceOver: voiceOver)
             },
-            set: { shown in if !shown { dismissedWinSeed = store.state.seed } }
+            set: { shown in if !shown { dismissedWinDeal = store.dealID } }
         )
     }
 
