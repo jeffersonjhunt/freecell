@@ -8,7 +8,7 @@
 #   the version and build number that were archived.
 #
 #   tools/check-release.sh <release-dir>                          both exported packages
-#   tools/check-release.sh --app <Solitaire.app> <ios|macos> <build>   one app bundle
+#   tools/check-release.sh --app <FreeCell.app> <ios|macos> <build>   one app bundle
 set -uo pipefail
 TEAM=${TEAM:-$(cat "$(dirname "$0")/../.devteam" 2>/dev/null)}
 # The version is project.yml's MARKETING_VERSION — one place to change it.
@@ -32,8 +32,8 @@ check_app() {
     if printf '%s' "$ents" | grep -q '"get-task-allow":true'; then bad "get-task-allow is true (debuggable)"; else ok "get-task-allow not true"; fi
   fi
   if printf '%s' "$ents" | grep -q '"com.apple.developer.game-center":true'; then ok "Game Center entitled"; else bad "no Game Center entitlement"; fi
-  if printf '%s' "$ents" | grep -q "\"com.apple.developer.ubiquity-kvstore-identifier\":\"$TEAM.com.oneoffendeavors.solitaire\""; then
-    ok "iCloud key-value store entitled"; else bad "no iCloud key-value store entitlement for $TEAM.com.oneoffendeavors.solitaire"; fi
+  if printf '%s' "$ents" | grep -q "\"com.apple.developer.ubiquity-kvstore-identifier\":\"$TEAM.com.oneoffendeavors.freecell\""; then
+    ok "iCloud key-value store entitled"; else bad "no iCloud key-value store entitlement for $TEAM.com.oneoffendeavors.freecell"; fi
   [ -f "$res/PrivacyInfo.xcprivacy" ] && ok "privacy manifest present" || bad "no PrivacyInfo.xcprivacy"
   local v b; v=$(plutil -extract CFBundleShortVersionString raw "$info" 2>/dev/null); b=$(plutil -extract CFBundleVersion raw "$info" 2>/dev/null)
   [ "$v" = "$VERSION" ] && [ "$b" = "$build" ] && ok "version $v ($b)" || bad "version $v ($b), expected $VERSION ($build)"
@@ -45,13 +45,13 @@ else
   dir=${1:?usage: tools/check-release.sh <release-dir> | --app <app> <ios|macos> <build>}
   build=$(cat "$dir/build-number" 2>/dev/null) || { echo "no $dir/build-number — run make archive"; exit 1; }
   t=$(mktemp -d); trap 'rm -rf "$t"' EXIT
-  if [ -f "$dir/export-ios/Solitaire.ipa" ]; then
-    (cd "$t" && unzip -q "$OLDPWD/$dir/export-ios/Solitaire.ipa") && check_app "$t/Payload/Solitaire.app" ios "$build"
-  else bad "no $dir/export-ios/Solitaire.ipa"; fi
-  if [ -f "$dir/export-macos/Solitaire.pkg" ]; then
-    echo "macos installer: $(pkgutil --check-signature "$dir/export-macos/Solitaire.pkg" | sed -n 's/^ *1\. //p')"
-    pkgutil --expand-full "$dir/export-macos/Solitaire.pkg" "$t/pkg" >/dev/null
-    check_app "$(find "$t/pkg" -name Solitaire.app -maxdepth 4 | head -1)" macos "$build"
-  else bad "no $dir/export-macos/Solitaire.pkg"; fi
+  if [ -f "$dir/export-ios/FreeCell.ipa" ]; then
+    (cd "$t" && unzip -q "$OLDPWD/$dir/export-ios/FreeCell.ipa") && check_app "$t/Payload/FreeCell.app" ios "$build"
+  else bad "no $dir/export-ios/FreeCell.ipa"; fi
+  if [ -f "$dir/export-macos/FreeCell.pkg" ]; then
+    echo "macos installer: $(pkgutil --check-signature "$dir/export-macos/FreeCell.pkg" | sed -n 's/^ *1\. //p')"
+    pkgutil --expand-full "$dir/export-macos/FreeCell.pkg" "$t/pkg" >/dev/null
+    check_app "$(find "$t/pkg" -name FreeCell.app -maxdepth 4 | head -1)" macos "$build"
+  else bad "no $dir/export-macos/FreeCell.pkg"; fi
 fi
 [ "$fail" = 0 ] && echo "release check passed" || { echo "release check FAILED"; exit 1; }

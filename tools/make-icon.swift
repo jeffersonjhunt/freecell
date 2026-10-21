@@ -1,4 +1,4 @@
-// Draws Solitaire's app icon with SwiftUI and writes every PNG the asset catalog asks for:
+// Draws FreeCell's app icon with SwiftUI and writes every PNG the asset catalog asks for:
 //
 //   swift tools/make-icon.swift Resources/Assets.xcassets/AppIcon.appiconset [preview-dir]
 //
@@ -165,8 +165,8 @@ MainActor.assumeIsolated {
     try! json.write(to: out.appendingPathComponent("Contents.json"))
     if args.count >= 3 {
         let preview = URL(fileURLWithPath: args[2])
-        writePNG(resized(ios, 1024, opaque: true), preview.appendingPathComponent("Solitaire-icon-ios.png"))
-        writePNG(resized(mac, 1024, opaque: false), preview.appendingPathComponent("Solitaire-icon-mac.png"))
+        writePNG(resized(ios, 1024, opaque: true), preview.appendingPathComponent("FreeCell-icon-ios.png"))
+        writePNG(resized(mac, 1024, opaque: false), preview.appendingPathComponent("FreeCell-icon-mac.png"))
     }
     print("wrote \(images.count) icon images to \(out.path)")
 }

@@ -1,4 +1,4 @@
-# Solitaire — build, run, test and profile on the Mac from the command line, no Xcode IDE.
+# FreeCell — build, run, test and profile on the Mac from the command line, no Xcode IDE.
 # Run `make help` for targets. Needs full Xcode as the active toolchain:
 #   sudo xcode-select -s /Applications/Xcode.app
 # The .xcodeproj is generated from project.yml by the XcodeGen pinned in .xcodegen-version
@@ -9,14 +9,14 @@ VERSION := $(shell sed -n 's/^ *MARKETING_VERSION: *"\(.*\)"/\1/p' project.yml)
 
 .DEFAULT_GOAL := build
 
-PROJECT   := Solitaire.xcodeproj
-SCHEME    := Solitaire
+PROJECT   := FreeCell.xcodeproj
+SCHEME    := FreeCell
 CONFIG    := Debug
 DERIVED   := build/DerivedData
-MAC_APP   := $(DERIVED)/Build/Products/$(CONFIG)/Solitaire.app
-IOS_APP   := $(DERIVED)/Build/Products/$(CONFIG)-iphoneos/Solitaire.app
+MAC_APP   := $(DERIVED)/Build/Products/$(CONFIG)/FreeCell.app
+IOS_APP   := $(DERIVED)/Build/Products/$(CONFIG)-iphoneos/FreeCell.app
 XCODEGEN  := tools/xcodegen
-MAC_PID   := pgrep -n -f "$(CURDIR)/$(MAC_APP)/Contents/MacOS/Solitaire"
+MAC_PID   := pgrep -n -f "$(CURDIR)/$(MAC_APP)/Contents/MacOS/FreeCell"
 XCB       := xcodebuild -project $(PROJECT) -scheme $(SCHEME) -configuration $(CONFIG) -derivedDataPath $(DERIVED)
 
 # Signing — per developer, so read from gitignored files (or set on the command line):
@@ -63,9 +63,9 @@ DEVICE ?= $(shell cat .device 2>/dev/null)
 # Profiling opens the Debug-only King→Ace position (UITestScenario.swift) with its own save file
 # and settings, so it never touches your game. It profiles the Debug build — slower than Release,
 # so a clean trace holds for both.
-BUNDLE_ID   := com.oneoffendeavors.solitaire
-PROFILE_ENV := SOLITAIRE_SCENARIO=kingToAce SOLITAIRE_SAVE_FILE=profiling SOLITAIRE_DEFAULTS_SUITE=profiling
-PROFILE_ENV_JSON := {"SOLITAIRE_SCENARIO":"kingToAce","SOLITAIRE_SAVE_FILE":"profiling","SOLITAIRE_DEFAULTS_SUITE":"profiling"}
+BUNDLE_ID   := com.oneoffendeavors.freecell
+PROFILE_ENV := FREECELL_SCENARIO=kingToAce FREECELL_SAVE_FILE=profiling FREECELL_DEFAULTS_SUITE=profiling
+PROFILE_ENV_JSON := {"FREECELL_SCENARIO":"kingToAce","FREECELL_SAVE_FILE":"profiling","FREECELL_DEFAULTS_SUITE":"profiling"}
 TEMPLATE ?= Animation Hitches
 TIME     ?= 30s
 TRACES   := build/traces
@@ -92,10 +92,10 @@ build: generate ## Build the Mac app (signed per .signid / .devteam, else ad-hoc
 
 run: build ## Build, launch the Mac app, stream its logs (stops when you quit it)
 	@open "$(MAC_APP)"
-	@echo ">> launched — streaming logs (stops when you quit Solitaire; Ctrl-C also works):"
+	@echo ">> launched — streaming logs (stops when you quit FreeCell; Ctrl-C also works):"
 	@app_pid=""; \
 	for i in $$(seq 1 50); do app_pid=$$($(MAC_PID)); [ -n "$$app_pid" ] && break; sleep 0.1; done; \
-	log stream --style compact --predicate 'process == "Solitaire"' & \
+	log stream --style compact --predicate 'process == "FreeCell"' & \
 	log_pid=$$!; \
 	trap 'kill $$log_pid 2>/dev/null' INT TERM EXIT; \
 	if [ -n "$$app_pid" ]; then \
@@ -106,17 +106,17 @@ run: build ## Build, launch the Mac app, stream its logs (stops when you quit it
 	fi
 
 logs: ## Stream the running app's logs
-	log stream --style compact --predicate 'process == "Solitaire"'
+	log stream --style compact --predicate 'process == "FreeCell"'
 
 stop: ## Quit the running Mac app
-	-killall Solitaire
+	-killall FreeCell
 
 test: generate ## Engine tests + the app's unit tests on the Mac
-	swift test --package-path Packages/SolitaireEngine
-	$(UNLOCK) $(XCB) -destination 'platform=macOS' -only-testing:SolitaireTests $(MAC_SIGN) test
+	swift test --package-path Packages/FreeCellEngine
+	$(UNLOCK) $(XCB) -destination 'platform=macOS' -only-testing:FreeCellTests $(MAC_SIGN) test
 
 uitest: generate ## UI tests on the Mac — leave the Mac alone while they run
-	$(UNLOCK) $(XCB) -destination 'platform=macOS' -only-testing:SolitaireUITests $(MAC_SIGN) test
+	$(UNLOCK) $(XCB) -destination 'platform=macOS' -only-testing:FreeCellUITests $(MAC_SIGN) test
 
 devices: ## List iPhones and iPads (connected devices and simulators)
 	xcrun devicectl list devices
@@ -141,7 +141,7 @@ profile: install ## Record Animation Hitches on DEVICE from the King→Ace posit
 	@sleep 2
 	@echo ">> recording $(TIME) on $(DEVICE) — drag the King→Ace run back and forth"
 	xcrun xctrace record --template "$(TEMPLATE)" --device "$(DEVICE)" --time-limit $(TIME) \
-	  --output "$(TRACES)/device-$$(date +%Y%m%d-%H%M%S).trace" --attach Solitaire
+	  --output "$(TRACES)/device-$$(date +%Y%m%d-%H%M%S).trace" --attach FreeCell
 	@trace="$$(ls -td $(TRACES)/*.trace | head -1)"; \
 	if [ "$(OPEN)" = no ]; then echo ">> saved: $$trace"; else open "$$trace"; fi
 
@@ -170,10 +170,10 @@ archive: need-team need-asc generate ## Release archives for iOS and the Mac (bu
 	@# key-value store, the Mac sandbox) — an unsigned archive exported without them, and the
 	@# upload was accepted all the same (U21). The development profile this needs covers the
 	@# registered devices; export then re-signs for the App Store.
-	$(UNLOCK) $(RELEASE_XCB) -destination 'generic/platform=iOS' -archivePath $(RELEASE_DIR)/Solitaire-ios.xcarchive \
+	$(UNLOCK) $(RELEASE_XCB) -destination 'generic/platform=iOS' -archivePath $(RELEASE_DIR)/FreeCell-ios.xcarchive \
 	  CURRENT_PROJECT_VERSION=$(BUILD_NUMBER) CODE_SIGN_STYLE=Automatic DEVELOPMENT_TEAM=$(DEV_TEAM) $(KEYCHAIN_FLAG) \
 	  -allowProvisioningUpdates $(ASC_AUTH) archive
-	$(UNLOCK) $(RELEASE_XCB) -destination 'generic/platform=macOS' -archivePath $(RELEASE_DIR)/Solitaire-macos.xcarchive \
+	$(UNLOCK) $(RELEASE_XCB) -destination 'generic/platform=macOS' -archivePath $(RELEASE_DIR)/FreeCell-macos.xcarchive \
 	  CURRENT_PROJECT_VERSION=$(BUILD_NUMBER) CODE_SIGN_STYLE=Automatic DEVELOPMENT_TEAM=$(DEV_TEAM) $(KEYCHAIN_FLAG) \
 	  -allowProvisioningUpdates $(ASC_AUTH) archive
 
@@ -188,17 +188,17 @@ export: need-team need-asc ## Sign the archives for the App Store (Apple signs, 
 	  '</dict></plist>' > $(RELEASE_DIR)/ExportOptions.plist
 	@for p in ios macos; do rm -rf $(RELEASE_DIR)/export-$$p; \
 	  echo ">> exporting $$p"; \
-	  $(UNLOCK) xcodebuild -exportArchive -archivePath $(RELEASE_DIR)/Solitaire-$$p.xcarchive \
+	  $(UNLOCK) xcodebuild -exportArchive -archivePath $(RELEASE_DIR)/FreeCell-$$p.xcarchive \
 	    -exportPath $(RELEASE_DIR)/export-$$p -exportOptionsPlist $(RELEASE_DIR)/ExportOptions.plist \
 	    -allowProvisioningUpdates $(ASC_AUTH) > $(RELEASE_DIR)/export-$$p.log 2>&1 \
 	  || { tail -20 $(RELEASE_DIR)/export-$$p.log; exit 1; }; done
 	TEAM=$(DEV_TEAM) tools/check-release.sh $(RELEASE_DIR)
 
 upload: need-asc ## Upload exactly the checked packages to App Store Connect (TestFlight)
-	@test -f $(RELEASE_DIR)/export-ios/Solitaire.ipa -a -f $(RELEASE_DIR)/export-macos/Solitaire.pkg \
+	@test -f $(RELEASE_DIR)/export-ios/FreeCell.ipa -a -f $(RELEASE_DIR)/export-macos/FreeCell.pkg \
 	  || { echo "Run make archive export first."; exit 1; }
 	TEAM=$(DEV_TEAM) tools/check-release.sh $(RELEASE_DIR)
-	@for f in $(RELEASE_DIR)/export-ios/Solitaire.ipa $(RELEASE_DIR)/export-macos/Solitaire.pkg; do \
+	@for f in $(RELEASE_DIR)/export-ios/FreeCell.ipa $(RELEASE_DIR)/export-macos/FreeCell.pkg; do \
 	  echo ">> uploading $$f"; \
 	  xcrun altool --upload-package "$$f" --api-key $(ASC_KEY_ID) --api-issuer $(ASC_ISSUER_ID) \
 	    --p8-file-path "$(ASC_KEY_PATH)" || exit 1; done
