@@ -133,11 +133,17 @@ move — it returns `nil` or `false` so the view can simply not animate.
 enum FreeCellEngine {
     static func deal(number: Int) -> [[Card]]                     // Microsoft's layout
     static func newGame(number: Int, hardCore: Bool) -> GameState
+    static func restart(_ state: GameState) -> GameState         // same number, marked restarted
+    static func randomNumber(using: inout some RandomNumberGenerator) -> Int  // never unwinnable
     static func canMove(_ move: Move, in state: GameState) -> Bool
-    static func apply(_ move: Move, to state: inout GameState)    // then the automatic plays
+    static func canPickUp(from: PileID, index: Int, in state: GameState) -> Bool
+    static func apply(_ move: Move, to state: inout GameState)    // the player's: counts one move
+    static func applyAutomatic(_ move: Move, to state: inout GameState)  // the game's: counts none
     static func maxRun(onto destination: PileID, in state: GameState) -> Int
     static func autoDestination(for source: PileID, index: Int, in state: GameState) -> PileID?
-    static func safePlays(in state: GameState) -> [Move]          // cards no one needs
+    static func isSafeToPlayHome(_ card: Card, in state: GameState) -> Bool
+    static func nextSafePlay(in state: GameState) -> Move?        // one automatic play, or nil
+    static func settle(_ state: inout GameState) -> [Move]        // every automatic play
     static func canAutoFinish(_ state: GameState) -> Bool
     static func nextAutoFinishMove(in state: GameState) -> Move?
     static func isWon(_ state: GameState) -> Bool
@@ -147,17 +153,19 @@ enum FreeCellEngine {
 
 **Tap-to-move** sends the tapped card (with the cards below it, if they form a run it may move) to
 the first of: its foundation (a single card); a column that accepts it, scanning left to right from
-the column after its own; a free cell (a single card from a column); an empty column — the longest
-movable run, and never when the card already sits alone in a column. A card in a free cell never
+the column after its own; a free cell (a single card from a column); an empty column, if the run
+fits there — never for a card already alone in its column. A card in a free cell never
 goes to another cell. Nothing legal: a 0.25 s wiggle and no change.
 
 **A run counts as one move**, however many cards it carries, and so does a card sent to a cell or a
-foundation; the automatic plays cost none. Undo restores the board and the move count but not the
+foundation; the automatic plays and the Finish steps cost none (`applyAutomatic`). The store plays
+the automatic plays one at a time, 90 ms apart, as part of the move that freed them. Undo restores the board and the move count but not the
 clock or the undo count, as in Solitaire.
 
 **Finish** (auto-finish) is offered once every column is in order — each card lower than the one
 above it — so every remaining card can go home without help. It plays the lowest available card to
-a foundation every 90 ms; each step is a normal move, so Undo walks back through them.
+a foundation every 90 ms. The steps cost no moves (a fast Finish never changes a game's rank),
+and each is its own undo step.
 
 **Undo** is a stack of `GameState` snapshots pushed before every change, capped at 300 and cleared on
 a new deal. A won game cannot be undone. Redo is not required.
@@ -369,6 +377,6 @@ restated, not referenced.
 | 2026-10-20 | Hard Core: option A — one switch, two free cells; one Top 10 (HC marked), its own Game Center board. |
 | 2026-10-20 | Restart kept, as in Solitaire: a restart scores nothing; choosing a number again is a new game and counts. |
 | 2026-10-20 | From the mockups: free cells left, foundations right; small cards accepted on a phone held sideways; New Game random at once, the chip and the win card open Choose a game; win card leads with time. |
-| 2026-10-20 | Rules calls made for the spec (open to change): no moves back from a foundation (Microsoft's rule); safe automatic plays on by default, with a setting; a run counts as one move and automatic plays as none; Finish when every column is in order; Shuffle's deck ends in the middle of the table. |
+| 2026-10-20 | Rules calls made for the spec (open to change): no moves back from a foundation (Microsoft's rule); safe automatic plays on by default, with a setting; a run counts as one move, and automatic plays and Finish steps as none; Finish when every column is in order; Shuffle's deck ends in the middle of the table. |
 | 2026-09-27 | (From Solitaire) A won game cannot be changed or undone. Release builds can't be attached to by a debugger (`tools/check-release.sh`). Cards narrower than 44 pt widen their tap area to the column slot. |
 | 2026-10-01 | (From Solitaire) One layout everywhere, the header over the board and the labelled bar along the bottom; Space Mono figures; burnt orange accent; card faces and backs as listed; About links open in the browser. Closing the Mac's game window quits. |

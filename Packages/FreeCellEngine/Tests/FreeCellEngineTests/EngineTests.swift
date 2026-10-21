@@ -2,552 +2,309 @@ import Foundation
 import Testing
 @testable import FreeCellEngine
 
-typealias E = FreeCellEngine
+// MARK: - The deal (spec "Game rules" › Deal)
 
-// MARK: - Deal (acceptance: 52 distinct cards, 28 in the tableau with 7 face up, 24 in the stock)
+@Suite struct Dealing {
+    /// The deal as the published layouts write it: rows across the eight columns.
+    func rows(_ number: Int) -> [String] {
+        let columns = E.deal(number: number)
+        return (0..<7).map { row in columns.compactMap { $0.indices.contains(row) ? name($0[row]) : nil }.joined(separator: " ") }
+    }
 
-@Suite struct Deal {
-    @Test(arguments: [0, 1, 42, 2026, UInt64.max])
-    func newDealHasTheRightShape(seed: UInt64) {
-        for drawCount in [1, 3] {
-            let s = E.newGame(drawCount: drawCount, seed: seed)
-            #expect(Set(allCards(s).map(\.id)).count == 52)
-            #expect(allCards(s).count == 52)
-            #expect(s.tableau.map(\.count) == [1, 2, 3, 4, 5, 6, 7])
-            #expect(s.tableau.flatMap { $0 }.filter(\.isFaceUp).count == 7)
-            #expect(s.tableau.allSatisfy { $0.last!.isFaceUp })
-            #expect(s.stock.count == 24 && s.stock.allSatisfy { !$0.isFaceUp })
-            #expect(s.waste.isEmpty && s.foundations == [[], [], [], []])
-            #expect(s.drawCount == drawCount && s.moveCount == 0 && !s.isWon && s.seed == seed)
+    @Test func game1IsMicrosoftsGame1() {
+        #expect(rows(1) == ["JD 2D 9H JC 5D 7H 7C 5H", "KD KC 9S 5S AD QC KH 3H", "2S KS 9D QD JS AS AH 3C",
+                            "4C 5C TS QH 4H AC 4D 7S", "3S TD 4S TH 8H 2C JH 7D", "6D 8S 8D QS 6C 3D 8C TC",
+                            "6S 9C 2H 6H"])
+    }
+
+    @Test func game617IsMicrosoftsGame617() {
+        #expect(rows(617) == ["7D AD 5C 3S 5S 8C 2D AH", "TD 7S QD AC 6D 8H AS KH", "TH QC 3H 9D 6S 8D 3D TC",
+                              "KD 5H 9S 3C 8S 7H 4D JS", "4C QS 9C 9H 7C 6H 2C 2S", "4S TS 2H 5D JC 6C JH QH",
+                              "JD KS KC 4H"])
+    }
+
+    @Test(arguments: [1, 2, 617, 11982, 32000, 500_000, 1_000_000])
+    func everyDealHas52CardsInColumnsOfSevenAndSix(number: Int) {
+        let s = E.newGame(number: number)
+        #expect(s.tableau.map(\.count) == [7, 7, 7, 7, 6, 6, 6, 6])
+        #expect(Set(allCards(s)).count == 52)
+        #expect(s.cells == [nil, nil, nil, nil] && s.foundations.allSatisfy(\.isEmpty))
+        #expect(s.number == number && s.moveCount == 0 && !s.isWon)
+    }
+
+    @Test func hardCoreHasTwoFreeCells() {
+        let s = E.newGame(number: 5, hardCore: true)
+        #expect(s.cells.count == 2 && s.isHardCore)
+        #expect(s.tableau == E.newGame(number: 5).tableau, "the same deal either way")
+    }
+
+    @Test func newGameNeverDealsAnUnwinnableNumber() {
+        #expect(E.unwinnable.count == 8 && E.unwinnable.contains(11982))
+        var g = SeededGenerator(state: 1)
+        for _ in 0..<5000 {
+            let n = E.randomNumber(using: &g)
+            #expect(E.numbers.contains(n) && !E.unwinnable.contains(n))
         }
     }
 
-    @Test func sameSeedSameDealDifferentSeedDifferentDeal() {
-        #expect(E.newGame(drawCount: 1, seed: 7) == E.newGame(drawCount: 1, seed: 7))
-        #expect(E.newGame(drawCount: 1, seed: 7) != E.newGame(drawCount: 1, seed: 8))
-    }
-
-    /// SplitMix64's published reference output for seed 0.
-    @Test func splitMixMatchesTheReference() {
-        var rng = SplitMix64(seed: 0)
-        #expect(rng.next() == 0xE220_A839_7B1D_CDAF)
-        #expect(rng.next() == 0x6E78_9E6A_A1B9_65F4)
-    }
-
-    /// Pins the deal for one seed, so the same seed deals the same game on every platform and
-    /// Swift version (this test runs on macOS and on Linux).
-    @Test func dealIsStableAcrossPlatforms() {
-        let s = E.newGame(drawCount: 1, seed: 42)
-        #expect(s.tableau.map { $0.last!.id } == GoldenDeal.seed42Tops)
-        #expect(s.stock.map(\.id) == GoldenDeal.seed42Stock)
+    @Test func restartDealsTheSameNumberAgainMarked() {
+        var s = E.newGame(number: 617, hardCore: true)
+        s.moveCount = 12; s.elapsed = 40; s.undos = 2
+        s.cells[0] = s.tableau[0].removeLast()
+        let again = E.restart(s)
+        #expect(again.isRestarted && again.number == 617 && again.isHardCore)
+        #expect(again.tableau == E.deal(number: 617) && again.moveCount == 0 && again.elapsed == 0 && again.undos == 0)
     }
 }
 
-// MARK: - Legal and illegal moves (acceptance: every rule allowed, everything else refused)
+// MARK: - Moves (spec "Game rules" › Moves)
 
-@Suite struct Moves {
-    func can(_ s: GameState, _ src: PileID, _ i: Int, _ dst: PileID) -> Bool {
-        E.canMove(Move(source: src, index: i, destination: dst), in: s)
+@Suite struct SingleCards {
+    @Test func foundationsBuildUpBySuitFromTheAce() {
+        let s = board(columns: [cards("AS"), cards("2S"), cards("2H")], foundations: [])
+        #expect(E.canMove(Move(source: .tableau(0), index: 0, destination: .foundation(0)), in: s))
+        #expect(!E.canMove(Move(source: .tableau(1), index: 0, destination: .foundation(0)), in: s), "no ace yet")
+        let t = board(columns: [cards("2S"), cards("2H"), cards("3S")], foundations: [foundation(.spades, upTo: 1)])
+        #expect(E.canMove(Move(source: .tableau(0), index: 0, destination: .foundation(0)), in: t))
+        #expect(!E.canMove(Move(source: .tableau(1), index: 0, destination: .foundation(0)), in: t), "wrong suit")
+        #expect(!E.canMove(Move(source: .tableau(2), index: 0, destination: .foundation(0)), in: t), "skips a rank")
     }
 
-    @Test func toFoundation() {
-        let s = board(tableau: [[down("5C"), up("2H")], [up("9S"), up("8H")]],
-                      waste: [up("3D"), up("AS")],
-                      foundations: [[], foundation(.hearts, upTo: 1)])
-        #expect(can(s, .waste, 1, .foundation(0)))            // ace onto an empty foundation
-        #expect(can(s, .waste, 1, .foundation(2)))            // any empty foundation
-        #expect(!can(s, .waste, 1, .foundation(1)))           // ace onto a non-empty one
-        #expect(can(s, .tableau(0), 1, .foundation(1)))       // 2♥ on A♥: same suit, one higher
-        #expect(!can(s, .tableau(0), 1, .foundation(0)))      // 2 onto empty
-        #expect(!can(s, .waste, 0, .foundation(0)))           // not the waste top
-        #expect(!can(s, .tableau(1), 0, .foundation(0)))      // a run of two cannot go up
-        // …even when its first card fits: 2♥ (with A♠ on it) onto A♥ would bury the A♠.
-        let fits = board(tableau: [[up("2H"), up("AS")]], foundations: [foundation(.hearts, upTo: 1)])
-        #expect(!can(fits, .tableau(0), 0, .foundation(0)))
-        #expect(can(fits, .tableau(0), 1, .foundation(1)))    // the A♠ alone may go
+    @Test func aCardOnAFoundationNeverMoves() {
+        let s = board(columns: [cards("3H")], foundations: [foundation(.spades, upTo: 2)])
+        #expect(!E.canMove(Move(source: .foundation(0), index: 1, destination: .tableau(0)), in: s))
+        #expect(!E.canMove(Move(source: .foundation(0), index: 1, destination: .tableau(1)), in: s))
+        #expect(!E.canPickUp(from: .foundation(0), index: 1, in: s))
+        #expect(E.autoDestination(for: .foundation(0), index: 1, in: s) == nil)
     }
 
-    @Test func foundationNeedsSameSuitAndNextRank() {
-        let s = board(tableau: [[up("3H")], [up("3D")], [up("4H")]],
-                      foundations: [foundation(.hearts, upTo: 2)])
-        #expect(can(s, .tableau(0), 0, .foundation(0)))
-        #expect(!can(s, .tableau(1), 0, .foundation(0)))      // wrong suit
-        #expect(!can(s, .tableau(2), 0, .foundation(0)))      // skips a rank
+    @Test func columnsBuildDownInAlternatingColours() {
+        let s = board(columns: [cards("7H"), cards("8S"), cards("8D"), cards("9S"), [], cards("3C")])
+        #expect(E.canMove(Move(source: .tableau(0), index: 0, destination: .tableau(1)), in: s))
+        #expect(!E.canMove(Move(source: .tableau(0), index: 0, destination: .tableau(2)), in: s), "same colour")
+        #expect(!E.canMove(Move(source: .tableau(0), index: 0, destination: .tableau(3)), in: s), "two ranks apart")
+        #expect(E.canMove(Move(source: .tableau(5), index: 0, destination: .tableau(4)), in: s), "any card to an empty column")
     }
 
-    @Test func tableauToTableau() {
-        let s = board(tableau: [[down("2C"), up("9H"), up("8C"), up("7D")],
-                                [up("10S")], [up("10H")], [up("9S")], [], [down("KC")]])
-        #expect(can(s, .tableau(0), 1, .tableau(1)))          // 9♥-8♣-7♦ onto 10♠
-        #expect(!can(s, .tableau(0), 1, .tableau(2)))         // same colour
-        #expect(!can(s, .tableau(0), 1, .tableau(3)))         // wrong rank
-        #expect(!can(s, .tableau(0), 2, .tableau(3)))         // 8♣ onto 9♠: same colour
-        #expect(!can(s, .tableau(0), 3, .tableau(0)))         // onto its own pile
-        #expect(!can(s, .tableau(0), 0, .tableau(1)))         // a face-down card
-        #expect(!can(s, .tableau(0), 1, .tableau(4)))         // only a king onto an empty column
-        #expect(!can(s, .tableau(3), 0, .tableau(5)))         // onto a face-down card
-        // Rank and colour both fit, so only the face-down check can refuse these:
-        let hidden = board(tableau: [[up("9S")], [down("10H")]])
-        #expect(!can(hidden, .tableau(0), 0, .tableau(1)))
-        // 9♥-8♠-7♠ is not a built run (7♠ on 8♠), though 9♥ itself fits the 10♠:
-        let unbuilt = board(tableau: [[up("9H"), up("8S"), up("7S")], [up("10S")]])
-        #expect(!can(unbuilt, .tableau(0), 0, .tableau(1)))
-        #expect(E.autoDestination(for: .tableau(0), index: 0, in: unbuilt) == nil)
+    @Test func freeCellsHoldOneCardFromAColumn() {
+        let s = board(columns: [cards("9C 7H"), cards("8S")], cells: [c("KD")])
+        #expect(E.canMove(Move(source: .tableau(0), index: 1, destination: .cell(1)), in: s))
+        #expect(!E.canMove(Move(source: .tableau(0), index: 1, destination: .cell(0)), in: s), "occupied")
+        #expect(!E.canMove(Move(source: .tableau(0), index: 0, destination: .cell(1)), in: s), "not the last card")
+        #expect(!E.canMove(Move(source: .cell(0), index: 0, destination: .cell(1)), in: s), "never cell to cell")
+        let fromCell = board(columns: [cards("8S"), []], cells: [c("7H")])
+        #expect(E.canMove(Move(source: .cell(0), index: 0, destination: .tableau(0)), in: fromCell))
+        #expect(E.canMove(Move(source: .cell(0), index: 0, destination: .tableau(1)), in: fromCell))
     }
 
-    @Test func kingWithItsRunOntoAnEmptyColumn() {
-        let s = board(tableau: [[down("2C"), up("KH"), up("QS")], []])
-        #expect(can(s, .tableau(0), 1, .tableau(1)))
-        #expect(!can(s, .tableau(0), 2, .tableau(1)))         // queen alone may not
+    @Test func hardCoreHasOnlyTwoCells() {
+        let s = board(columns: [cards("9C 7H 4S")], hardCore: true)
+        #expect(E.canMove(Move(source: .tableau(0), index: 2, destination: .cell(1)), in: s))
+        #expect(!E.canMove(Move(source: .tableau(0), index: 2, destination: .cell(2)), in: s), "there is no third cell")
     }
 
-    @Test func wasteToTableau() {
-        let s = board(tableau: [[up("8S")]], waste: [up("7C"), up("7H")])
-        #expect(can(s, .waste, 1, .tableau(0)))
-        #expect(!can(s, .waste, 0, .tableau(0)))              // only the top of the waste
+    @Test func aCardUnderAnOutOfOrderCardCantBeLifted() {
+        let s = board(columns: [cards("8S 3H"), cards("9D")])
+        #expect(!E.canPickUp(from: .tableau(0), index: 0, in: s))
+        #expect(!E.canMove(Move(source: .tableau(0), index: 0, destination: .tableau(1)), in: s))
+        #expect(E.canPickUp(from: .tableau(0), index: 1, in: s))
     }
 
-    @Test func foundationBackToTableau() {
-        let s = board(tableau: [[up("4C")], [up("4H")], [up("3C")]],
-                      foundations: [foundation(.hearts, upTo: 3)])
-        #expect(can(s, .foundation(0), 2, .tableau(0)))       // 3♥ onto 4♣
-        #expect(!can(s, .foundation(0), 2, .tableau(1)))      // same colour
-        #expect(!can(s, .foundation(0), 1, .tableau(2)))      // 2♥ would fit 3♣, but is not the top
-        #expect(!can(s, .foundation(0), 2, .foundation(1)))   // foundation to foundation
-        // An ace could sit on any empty foundation — but never by moving between foundations.
-        let ace = board(foundations: [foundation(.hearts, upTo: 1)])
-        #expect(!can(ace, .foundation(0), 0, .foundation(1)))
-    }
-
-    @Test func nothingElse() {
-        let s = board(tableau: [[up("KS"), up("QH"), up("5D")], [up("6C")]],
-                      waste: [up("AS")], stock: [down("2D")])
-        #expect(!can(s, .stock, 0, .waste))                   // drawing is not a move
-        #expect(!can(s, .waste, 0, .stock))
-        #expect(!can(s, .waste, 0, .waste))
-        #expect(!can(s, .tableau(0), 0, .tableau(1)))         // K-Q-5 is not a built run
-        #expect(!can(s, .tableau(9), 0, .tableau(1)))
-        #expect(!can(s, .tableau(1), 0, .tableau(9)))
-        #expect(!can(s, .tableau(1), 0, .foundation(4)))
-        #expect(!can(s, .tableau(1), -1, .tableau(0)))
-        #expect(!can(s, .tableau(1), 1, .tableau(0)))
-        #expect(!can(board(), .waste, 0, .foundation(0)))     // empty waste
-    }
-
-    @Test func applyMovesTheRunAndFlipsTheUncoveredCardInOneMove() {
-        var s = board(tableau: [[down("2C"), up("9H"), up("8C")], [up("10S")]])
+    @Test func aMoveCountsOnceAndMovesTheCards() {
+        var s = board(columns: [cards("9C 7H"), cards("8S")])
         E.apply(Move(source: .tableau(0), index: 1, destination: .tableau(1)), to: &s)
-        #expect(s.tableau[1].map(\.id) == [up("10S"), up("9H"), up("8C")].map(\.id))
-        #expect(s.tableau[0] == [up("2C")])
-        #expect(s.moveCount == 1)
-    }
-
-    @Test func applyDetectsTheWin() {
-        var s = board(tableau: [[up("KS")]],
-                      foundations: [foundation(.spades, upTo: 12), foundation(.hearts, upTo: 13),
-                                    foundation(.diamonds, upTo: 13), foundation(.clubs, upTo: 13)])
-        #expect(!s.isWon)
-        E.apply(Move(source: .tableau(0), index: 0, destination: .foundation(0)), to: &s)
-        #expect(s.isWon && E.isWon(s))
+        #expect(s.tableau[0] == cards("9C") && s.tableau[1] == cards("8S 7H") && s.moveCount == 1)
     }
 }
 
-// MARK: - Stock, draw modes and redeal (acceptance: draw 3 plays only the top; redeal reverses)
+// MARK: - Runs and the run limit
 
-@Suite struct Stock {
-    @Test func drawOneTurnsUpTheTopCard() {
-        var s = board(stock: [down("2C"), down("7H")])
-        E.drawFromStock(&s)
-        #expect(s.waste == [up("7H")] && s.stock == [down("2C")] && s.moveCount == 1)
+@Suite struct Runs {
+    /// An alternating run, Q♠ down to 2♣.
+    static let run = cards("QS JH TC 9D 8S 7H 6C 5D 4S 3H 2C")
+
+    /// A position where the last `length` cards of column 1's run may move onto column 2 — or, with
+    /// `intoEmpty`, into an empty column — with `emptyCells` free cells and `emptyColumns` empty
+    /// columns (the destination among them when it is empty).
+    static func position(length: Int, emptyCells: Int, emptyColumns: Int, intoEmpty: Bool) -> (GameState, Move) {
+        let first = run[run.count - length]
+        var used = Set(run)
+        var destination: [Card] = []
+        if !intoEmpty {
+            let suit = Suit.allCases.first { $0.isRed != first.suit.isRed && !used.contains(Card(suit: $0, rank: first.rank + 1)) }!
+            destination = [Card(suit: suit, rank: first.rank + 1)]
+            used.formUnion(destination)
+        }
+        var fillers = (0..<52).map { Card(suit: Suit(rawValue: $0 % 4)!, rank: $0 / 4 + 1) }.filter { !used.contains($0) }
+        let take = { () -> Card in fillers.removeFirst() }
+        var columns: [[Card]] = [run, destination]
+        let emptyAfter = intoEmpty ? emptyColumns - 1 : emptyColumns     // column 2 is one of them when empty
+        for i in 0..<6 { columns.append(i < emptyAfter ? [] : [take()]) }
+        let cells: [Card?] = (0..<4).map { $0 < emptyCells ? nil : take() }
+        let s = board(columns: columns, cells: cells)
+        return (s, Move(source: .tableau(0), index: run.count - length, destination: .tableau(1)))
     }
 
-    @Test func drawThreeOnlyTheTopOfTheWasteIsPlayable() {
-        var s = board(tableau: [[up("8S")], [up("9C")]],
-                      stock: [down("AD"), down("8H"), down("7D"), down("6D")], drawCount: 3)
-        E.drawFromStock(&s)
-        #expect(s.waste.map(\.id) == [up("6D"), up("7D"), up("8H")].map(\.id))  // 8♥ drawn last, on top
-        #expect(s.waste.allSatisfy { $0.isFaceUp } && s.stock == [down("AD")])
-        #expect(E.canMove(Move(source: .waste, index: 2, destination: .tableau(1)), in: s))   // 8♥ on 9♣
-        #expect(!E.canMove(Move(source: .waste, index: 1, destination: .tableau(0)), in: s))  // 7♦ under it
-        E.drawFromStock(&s)                                      // only one left: draws one
-        #expect(s.waste.count == 4 && s.stock.isEmpty)
+    @Test(arguments: [(4, 0, 5), (0, 0, 1), (3, 0, 4), (2, 1, 6), (1, 2, 8), (4, 1, 10)])
+    func ontoACardTheLimitIsCellsPlusOneTimesTwoPerEmptyColumn(cells: Int, columns: Int, limit: Int) {
+        let (s, fits) = Self.position(length: limit, emptyCells: cells, emptyColumns: columns, intoEmpty: false)
+        #expect(E.maxRun(onto: .tableau(1), in: s) == limit)
+        #expect(E.canMove(fits, in: s), "a run of \(limit) moves")
+        let (t, tooLong) = Self.position(length: limit + 1, emptyCells: cells, emptyColumns: columns, intoEmpty: false)
+        #expect(!E.canMove(tooLong, in: t), "a run of \(limit + 1) doesn't")
     }
 
-    /// Under a draw-3 fan the cards often look like a built run (7♦ then 6♣); only the top card
-    /// may still be played — never the card beneath it with the top riding along.
-    @Test func cardsUnderTheWasteTopStayPutEvenWhenTheyLookLikeARun() {
-        let s = board(tableau: [[up("8S")]], waste: [up("7D"), up("6C")], drawCount: 3)
-        #expect(!E.canMove(Move(source: .waste, index: 0, destination: .tableau(0)), in: s))
-        #expect(E.autoDestination(for: .waste, index: 0, in: s) == nil)
+    @Test(arguments: [(4, 1, 5), (2, 2, 6), (0, 3, 4), (0, 1, 1)])
+    func intoAnEmptyColumnItCountsWithoutThatColumn(cells: Int, columns: Int, limit: Int) {
+        let (s, fits) = Self.position(length: limit, emptyCells: cells, emptyColumns: columns, intoEmpty: true)
+        #expect(E.maxRun(onto: .tableau(1), in: s) == limit)
+        #expect(E.canMove(fits, in: s))
+        let (t, tooLong) = Self.position(length: limit + 1, emptyCells: cells, emptyColumns: columns, intoEmpty: true)
+        #expect(!E.canMove(tooLong, in: t))
     }
 
-    @Test(arguments: [1, 3])
-    func redealRestoresTheStockInReverseSoTheSameCardsComeUpAgain(drawCount: Int) {
-        var s = E.newGame(drawCount: drawCount, seed: 99)
-        let stockBefore = s.stock
-        var firstPass: [[Card]] = []
-        while !s.stock.isEmpty { E.drawFromStock(&s); firstPass.append(s.waste) }
-        let moves = s.moveCount
-
-        #expect(s.redeals == 0 && s.passes == 1, "draws alone stay on the first pass")
-        E.drawFromStock(&s)                                      // redeal
-        #expect(s.moveCount == moves + 1, "a redeal counts as one move")
-        #expect(s.redeals == 1 && s.passes == 2, "a redeal starts the second pass")
-        #expect(s.waste.isEmpty)
-        #expect(s.stock == stockBefore, "same order, face down")
-        #expect(s.stock.map(\.id) == firstPass.last!.reversed().map(\.id))
-
-        var secondPass: [[Card]] = []
-        while !s.stock.isEmpty { E.drawFromStock(&s); secondPass.append(s.waste) }
-        #expect(secondPass == firstPass)
-    }
-
-    @Test func tappingAnEmptyStockWithAnEmptyWasteDoesNothing() {
-        var s = board()
-        E.drawFromStock(&s)
-        #expect(s == board() && s.moveCount == 0)
+    @Test func aRunMovesAsOneMove() {
+        var (s, move) = Self.position(length: 5, emptyCells: 4, emptyColumns: 0, intoEmpty: false)
+        E.apply(move, to: &s)
+        #expect(s.moveCount == 1 && s.tableau[1].count == 6 && s.tableau[0].count == 6)
     }
 }
 
-// MARK: - Pick-up (drag): face-up cards only, and only the top of the waste or a foundation
-
-@Suite struct PickUp {
-    @Test func whatMayBeDragged() {
-        let s = board(tableau: [[down("2C"), up("9H"), up("8C")], [up("KS"), up("QH"), up("5D")]],
-                      waste: [up("7C"), up("7H")], stock: [down("3D")],
-                      foundations: [foundation(.spades, upTo: 2)])
-        #expect(E.canPickUp(from: .tableau(0), index: 1, in: s))        // 9♥ with 8♣ on it
-        #expect(E.canPickUp(from: .tableau(0), index: 2, in: s))
-        #expect(!E.canPickUp(from: .tableau(0), index: 0, in: s))       // face down
-        #expect(!E.canPickUp(from: .tableau(1), index: 0, in: s))       // K-Q-5 is not a built run
-        #expect(E.canPickUp(from: .waste, index: 1, in: s))
-        #expect(!E.canPickUp(from: .waste, index: 0, in: s))            // under the waste top
-        #expect(E.canPickUp(from: .foundation(0), index: 1, in: s))
-        #expect(!E.canPickUp(from: .foundation(0), index: 0, in: s))
-        #expect(!E.canPickUp(from: .stock, index: 0, in: s))
-        var won = s
-        won.isWon = true
-        #expect(!E.canPickUp(from: .tableau(0), index: 2, in: won))
-    }
-}
-
-// MARK: - Tap-to-move (acceptance: never a no-op; king to an empty column by drag, not by tap)
+// MARK: - Tap-to-move
 
 @Suite struct TapToMove {
-    func dest(_ s: GameState, _ src: PileID, _ i: Int) -> PileID? {
-        E.autoDestination(for: src, index: i, in: s)
+    @Test func aFoundationComesFirst() {
+        let s = board(columns: [cards("AS"), cards("2D")])
+        #expect(E.autoDestination(for: .tableau(0), index: 0, in: s) == .foundation(0))
     }
 
-    @Test func aSingleCardPrefersTheFoundation() {
-        let s = board(tableau: [[up("2H")], [up("3S")]], foundations: [[], foundation(.hearts, upTo: 1)])
-        #expect(dest(s, .tableau(0), 0) == .foundation(1))
+    @Test func thenAColumnScanningFromTheNextOne() {
+        let s = board(columns: [cards("5C 7H"), cards("8S"), [], cards("8C")])
+        #expect(E.autoDestination(for: .tableau(0), index: 1, in: s) == .tableau(1))
+        let t = board(columns: [cards("8C"), cards("5C 7H"), cards("8S")])
+        #expect(E.autoDestination(for: .tableau(1), index: 1, in: t) == .tableau(2), "after its own column first")
     }
 
-    @Test func runsGoToTheFirstFittingColumnAfterTheSourceWrappingAround() {
-        let s = board(tableau: [[up("10D")], [], [up("8S")], [up("9C"), up("8H")], [], [up("9S")], [up("10H")]])
-        // 9♣-8♥ at column 3 fits 10♦ (col 0) and 10♥ (col 6): scanning 4,5,6,0… picks 6.
-        #expect(dest(s, .tableau(3), 0) == .tableau(6))
-        #expect(dest(s, .tableau(5), 0) == .tableau(6))        // 9♠ → 10♥, never an empty column first
-        // Wrap-around: 9♣ at column 5; the only fitting column (10♦) is to its left.
-        let wrap = board(tableau: [[up("5S")], [up("10D")], [up("6S")], [up("7S")], [], [up("9C")], [up("8S")]])
-        #expect(dest(wrap, .tableau(5), 0) == .tableau(1))
+    @Test func thenAFreeCellThenAnEmptyColumn() {
+        let s = board(columns: [cards("5C 7H"), []])
+        #expect(E.autoDestination(for: .tableau(0), index: 1, in: s) == .cell(0))
+        let run = board(columns: [cards("KD 8S 7H"), []])
+        #expect(E.autoDestination(for: .tableau(0), index: 1, in: run) == .tableau(1), "a run can't use a cell")
     }
 
-    /// Taps send cards toward the foundations; a tap never pulls one back down.
-    @Test func tappingAFoundationCardDoesNothing() {
-        let s = board(tableau: [[up("4C")], []], foundations: [foundation(.hearts, upTo: 3), foundation(.spades, upTo: 13)])
-        #expect(dest(s, .foundation(0), 2) == nil)             // 3♥ would fit the 4♣
-        #expect(dest(s, .foundation(1), 12) == nil)            // K♠ would fit the empty column
-        #expect(E.canMove(Move(source: .foundation(0), index: 2, destination: .tableau(0)), in: s),
-                "still possible by drag")
+    @Test func aCellCardNeverGoesToAnotherCell() {
+        let s = board(columns: [cards("3C"), []], cells: [c("7H")])
+        #expect(E.autoDestination(for: .cell(0), index: 0, in: s) == .tableau(1))
     }
 
-    @Test func emptyColumnIsTheLastResortAndNeverANoOp() {
-        let buried = board(tableau: [[down("3C"), up("KH")], []])
-        #expect(dest(buried, .tableau(0), 1) == .tableau(1))   // uncovers a card: offered
-        let alone = board(tableau: [[up("KH")], []])
-        #expect(dest(alone, .tableau(0), 0) == nil)            // would only shuffle columns
-        #expect(E.canMove(Move(source: .tableau(0), index: 0, destination: .tableau(1)), in: alone),
-                "still possible by drag")
+    @Test func aLoneCardStaysPutRatherThanChangeColumns() {
+        let full: [Card?] = cards("2C 2D 2H 2S")
+        let s = board(columns: [cards("7H"), []], cells: full)
+        #expect(E.autoDestination(for: .tableau(0), index: 0, in: s) == nil)
     }
 
-    @Test func nothingFitsReturnsNil() {
-        let s = board(tableau: [[up("5S")], [up("9H")]])
-        #expect(dest(s, .tableau(0), 0) == nil)
-        #expect(dest(s, .stock, 0) == nil)
-    }
-
-    /// Over many real positions: a tap target is always legal, and never a move that changes
-    /// nothing (same pile, or a whole column onto an empty column).
-    @Test func tapIsAlwaysLegalAndNeverANoOp() {
-        var checked = 0
-        for seed in UInt64(1)...40 {
-            var s = E.newGame(drawCount: 1, seed: seed)
-            for step in 0..<300 {
-                let sources = [(PileID.waste, s.waste.count - 1)]
-                    + (0..<4).map { (PileID.foundation($0), s.foundations[$0].count - 1) }
-                    + (0..<7).flatMap { t in s.tableau[t].indices.map { (PileID.tableau(t), $0) } }
-                for (src, i) in sources where i >= 0 {
-                    guard let d = E.autoDestination(for: src, index: i, in: s) else { continue }
-                    checked += 1
-                    #expect(d != src)
-                    if case .foundation = src { Issue.record("a tap moved a card off a foundation") }
-                    #expect(E.canMove(Move(source: src, index: i, destination: d), in: s))
-                    if case .tableau(let t) = d, s.tableau[t].isEmpty, case .tableau = src {
-                        #expect(i > 0, "moved a whole column to an empty column")
-                    }
-                }
-                let moves = legalMoves(s)
-                if !moves.isEmpty && step % 3 != 0 {
-                    E.apply(moves[(Int(seed) + step) % moves.count], to: &s)
-                } else {
-                    E.drawFromStock(&s)
-                }
-            }
-        }
-        #expect(checked > 1000, "the property must actually be exercised (checked \(checked))")
+    @Test func nothingLegalIsNil() {
+        let full: [Card?] = cards("2C 2D 2H 2S")
+        // Every column holds a card, none of them a black 8, and every cell is full.
+        let s = board(columns: [cards("5C 7H"), cards("9S"), cards("KH"), cards("QD"), cards("JD"),
+                                cards("TH"), cards("4C"), cards("3D")], cells: full)
+        #expect(E.autoDestination(for: .tableau(0), index: 1, in: s) == nil)
     }
 }
 
-// MARK: - Auto-finish and a full game (acceptance: a known-solvable seed plays to a win)
+// MARK: - Playing cards home automatically
 
-@Suite struct Finish {
-    @Test func autoFinishIsOfferedOnlyWhenEverythingIsFaceUpAndDealtOut() {
-        let open = board(tableau: [[up("2S"), up("AH")], [up("AS")]])
-        #expect(E.canAutoFinish(open))
-        #expect(!E.canAutoFinish(board(tableau: [[down("2S"), up("AH")]])))
-        #expect(!E.canAutoFinish(board(tableau: [[up("AH")]], waste: [up("2S")])))
-        #expect(!E.canAutoFinish(board(tableau: [[up("AH")]], stock: [down("2S")])))
+@Suite struct AutomaticPlays {
+    @Test func acesAndTwosAreAlwaysSafe() {
+        let s = board()
+        #expect(E.isSafeToPlayHome(c("AH"), in: s) && E.isSafeToPlayHome(c("2S"), in: s))
     }
 
-    @Test func autoFinishPlaysTheLowestRankFirstAndWins() {
-        var s = board(tableau: [[up("2S"), up("AH")], [up("2H"), up("AS")]],
-                      foundations: [[], [], foundation(.diamonds, upTo: 13), foundation(.clubs, upTo: 13)])
+    @Test func aCardIsSafeOnceBothOtherColourFoundationsAreOneBehind() {
+        let s = board(foundations: [foundation(.clubs, upTo: 5), foundation(.spades, upTo: 4),
+                                    foundation(.hearts, upTo: 5)])
+        #expect(!E.isSafeToPlayHome(c("6H"), in: s), "spades are only at 4")
+        let t = board(foundations: [foundation(.clubs, upTo: 5), foundation(.spades, upTo: 5),
+                                    foundation(.hearts, upTo: 5)])
+        #expect(E.isSafeToPlayHome(c("6H"), in: t))
+        #expect(!E.isSafeToPlayHome(c("3C"), in: t), "diamonds haven't started")
+    }
+
+    @Test func settlePlaysEverySafeCardAndCostsNoMoves() {
+        var s = board(columns: [cards("6H"), cards("4D"), cards("6C")], cells: [c("AD")],
+                      foundations: [foundation(.clubs, upTo: 5), foundation(.spades, upTo: 5),
+                                    foundation(.hearts, upTo: 5), foundation(.diamonds, upTo: 0)])
+        s.foundations[3] = []
+        let made = E.settle(&s)
+        #expect(made.count == 2, "A♦ and 6♥; 4♦ needs 2♦ and 3♦ first, and 6♣ needs the reds at 5")
+        #expect(s.tableau[0].isEmpty && s.cells[0] == nil && s.moveCount == 0)
+        #expect(s.tableau[2] == cards("6C"))
+    }
+
+    @Test func aPlayableButNeededCardStays() {
+        var s = board(columns: [cards("3H")], foundations: [foundation(.hearts, upTo: 2), foundation(.clubs, upTo: 1),
+                                                            foundation(.spades, upTo: 2)])
+        #expect(E.nextSafePlay(in: s) == nil, "a black 2 might still want the 3♥")
+        #expect(E.settle(&s).isEmpty)
+    }
+}
+
+// MARK: - Finish and winning
+
+@Suite struct FinishAndWin {
+    static let nearlyWon = board(columns: [cards("KC QC JC"), cards("KD QD JD"), cards("KH QH JH"), cards("KS QS JS")],
+                                 foundations: [foundation(.clubs, upTo: 10), foundation(.diamonds, upTo: 10),
+                                               foundation(.hearts, upTo: 10), foundation(.spades, upTo: 10)])
+
+    @Test func finishIsOfferedOnceEveryColumnIsInOrder() {
+        #expect(E.canAutoFinish(Self.nearlyWon))
+        #expect(E.canAutoFinish(board(columns: [cards("KS QS 5D"), cards("9H 2C")])))
+        #expect(!E.canAutoFinish(board(columns: [cards("5D 9H")])), "a 9 on a 5")
+        #expect(!E.canAutoFinish(board(columns: [cards("7S 7H")])), "equal ranks are out of order")
+    }
+
+    @Test func finishPlaysTheLowestCardHomeUntilWon() {
+        var s = Self.nearlyWon
         var ranks: [Int] = []
         while let m = E.nextAutoFinishMove(in: s) {
-            ranks.append(s[m.source][m.index].rank)
+            ranks.append(s[m.source].last!.rank)
+            E.applyAutomatic(m, to: &s)
+        }
+        #expect(ranks == [11, 11, 11, 11, 12, 12, 12, 12, 13, 13, 13, 13])
+        #expect(s.isWon && s.moveCount == 0)
+    }
+
+    @Test func aWonGameNeverChanges() {
+        var s = Self.nearlyWon
+        while let m = E.nextAutoFinishMove(in: s) { E.applyAutomatic(m, to: &s) }
+        #expect(legalMoves(s).isEmpty && !E.canAutoFinish(s) && E.nextSafePlay(in: s) == nil)
+    }
+}
+
+// MARK: - Invariants over real play
+
+@Suite struct RandomPlay {
+    @Test(arguments: [1, 617, 24301])
+    func randomPlayKeepsEveryCardAndCountsEachPlayerMove(number: Int) {
+        var s = E.newGame(number: number)
+        var g = SeededGenerator(state: UInt64(number))
+        var playerMoves = 0
+        for _ in 0..<200 {
+            let moves = legalMoves(s)
+            guard let m = moves.randomElement(using: &g) else { break }
             E.apply(m, to: &s)
+            playerMoves += 1
+            E.settle(&s)
+            #expect(Set(allCards(s)).count == 52 && allCards(s).count == 52)
         }
-        #expect(ranks == [1, 1, 2, 2])
-        #expect(s.tableau.allSatisfy { $0.isEmpty })
+        #expect(s.moveCount == playerMoves)
     }
 
-    @Test func nothingMovesOnceTheGameIsWon() {
-        var s = board(foundations: [foundation(.spades, upTo: 13), foundation(.hearts, upTo: 13),
-                                    foundation(.diamonds, upTo: 13), foundation(.clubs, upTo: 13)])
-        s.isWon = true
-        // K♠ onto an empty column is otherwise legal — only the won state refuses it.
-        #expect(!E.canMove(Move(source: .foundation(0), index: 12, destination: .tableau(0)), in: s))
-        s.stock = [down("2C")]                                  // the stock tap is refused as well
-        let before = s
-        E.drawFromStock(&s)
-        #expect(s == before)
-    }
-
-    @Test func aKnownSolvableSeedPlaysToAWin() {
-        let end = playGreedily(E.newGame(drawCount: 1, seed: GoldenDeal.solvableSeed))
-        #expect(end.isWon)
-        #expect(end.foundations.allSatisfy { $0.count == 13 })
-        #expect(!E.canAutoFinish(end), "nothing left to offer once won")
-    }
-}
-
-/// Values pinned from the first run and checked on every platform since.
-enum GoldenDeal {
-    static let seed42Tops = [9, 8, 2, 50, 24, 49, 16]
-    static let seed42Stock = [6, 28, 12, 39, 40, 0, 26, 25, 22, 4, 46, 36, 27, 42, 31, 17,
-                              14, 43, 18, 13, 19, 1, 33, 7]
-    /// The first seed (of 1...400, 44 winnable) that `playGreedily` wins with draw 1.
-    static let solvableSeed: UInt64 = 4
-}
-
-// MARK: - Passes through the deck (spec "Draw modes")
-
-@Suite struct Passes {
-    @Test func aNewDealIsOnItsFirstPass() {
-        #expect(E.newGame(drawCount: 3, seed: 7).passes == 1)
-    }
-
-    /// A save written before passes were counted has no `redeals`: it resumes with none.
-    @Test func olderSavesResumeWithNoRedeals() throws {
-        var s = E.newGame(drawCount: 1, seed: 7)
-        s.redeals = 4
-        let data = try JSONEncoder().encode(s)
-        var object = try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
-        #expect(object["redeals"] as? Int == 4, "written")
-        object.removeValue(forKey: "redeals")
-        let old = try JSONDecoder().decode(GameState.self, from: JSONSerialization.data(withJSONObject: object))
-        #expect(old.redeals == 0 && old.passes == 1)
-        var expected = s
-        expected.redeals = 0
-        #expect(old == expected, "everything else as saved")
-        #expect(try JSONDecoder().decode(GameState.self, from: data) == s, "a round trip keeps the count")
-    }
-}
-
-// MARK: - Hard Core (spec "Hard Core")
-
-@Suite struct HardCore {
-    /// Plays through the stock once (every card drawn), leaving it empty and the waste full.
-    func exhaustStock(_ s: inout GameState) {
-        while !s.stock.isEmpty { E.drawFromStock(&s) }
-    }
-
-    @Test func draw1GetsOnePassNoRedeal() {
-        var s = E.newGame(drawCount: 1, seed: 11, hardCore: true)
-        #expect(s.isHardCore && s.maxPasses == 1)
-        exhaustStock(&s)
-        #expect(!E.canRedeal(s) && E.isOutOfPasses(s))
-        let before = s
-        E.drawFromStock(&s)
-        #expect(s == before, "no redeal, not even a move counted")
-    }
-
-    @Test func draw3GetsThreePasses() {
-        var s = E.newGame(drawCount: 3, seed: 11, hardCore: true)
-        #expect(s.maxPasses == 3)
-        for pass in 1...3 {
-            #expect(s.passes == pass)
-            exhaustStock(&s)
-            if pass < 3 {
-                #expect(E.canRedeal(s) && !E.isOutOfPasses(s), "pass \(pass): a redeal remains")
-                E.drawFromStock(&s)
-            }
-        }
-        #expect(E.isOutOfPasses(s) && s.redeals == 2)
-        let before = s
-        E.drawFromStock(&s)
-        #expect(s == before, "no third redeal")
-    }
-
-    @Test(arguments: [1, 3])
-    func normalGamesRedealWithoutLimit(drawCount: Int) {
-        var s = E.newGame(drawCount: drawCount, seed: 11)
-        #expect(!s.isHardCore && s.maxPasses == nil)
-        for _ in 0..<5 { exhaustStock(&s); #expect(E.canRedeal(s)); E.drawFromStock(&s) }
-        #expect(s.redeals == 5 && !E.isOutOfPasses(s))
-    }
-
-    /// A save from before Hard Core is a normal game; Hard Core survives a round trip.
-    @Test func olderSavesAreNormalGames() throws {
-        let s = E.newGame(drawCount: 3, seed: 7, hardCore: true)
-        let data = try JSONEncoder().encode(s)
-        var object = try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
-        object.removeValue(forKey: "isHardCore")
-        let old = try JSONDecoder().decode(GameState.self, from: JSONSerialization.data(withJSONObject: object))
-        #expect(!old.isHardCore)
-        #expect(try JSONDecoder().decode(GameState.self, from: data) == s)
-    }
-}
-
-// MARK: - Scoring (spec "Scoring")
-
-@Suite struct Scoring {
-    @Test func aFreshDealIsWorthNothing() {
-        #expect(E.score(E.newGame(drawCount: 1, seed: 3)) == 0)
-    }
-
-    @Test(arguments: [(0, 600), (60, 600), (61, 599), (120, 540), (180, 420), (240, 240), (300, 0), (390, 0)])
-    func theTimeBonusIs600LessThePenalty(seconds: Int, bonus: Int) {
-        #expect(E.timeBonus(seconds: seconds) == bonus)
-    }
-
-    @Test(arguments: [(0, 0), (60, 0), (61, 1), (120, 60), (121, 62), (180, 180), (240, 360), (300, 600), (390, 1080)])
-    func theTimePenaltyEscalatesEachMinute(seconds: Int, penalty: Int) {
-        #expect(E.timePenalty(seconds: seconds) == penalty)
-    }
-
-    /// The spec's table: a one-pass, no-undo win scores 1000 under a minute, then less with time,
-    /// down to the 400 its cards and suits earned.
-    @Test(arguments: [(59, 1000), (120, 940), (180, 820), (240, 640), (300, 400), (390, 400)])
-    func aOnePassWin(seconds: Int, score: Int) {
-        var s = E.newGame(drawCount: 1, seed: 3)
-        s.foundations = Suit.allCases.map { suit in (1...13).map { Card(suit: suit, rank: $0, isFaceUp: true) } }
-        s.tableau = Array(repeating: [], count: 7); s.stock = []; s.waste = []
-        s.elapsed = TimeInterval(seconds)
-        #expect(E.score(s) == score)
-    }
-
-    @Test func cardsSuitsUndosAndRedealsCount() {
-        var s = E.newGame(drawCount: 1, seed: 3)
-        s.foundations[0] = (1...13).map { Card(suit: .spades, rank: $0, isFaceUp: true) }   // a suit
-        s.foundations[1] = [Card(suit: .hearts, rank: 1, isFaceUp: true)]                     // one more card
-        #expect(E.score(s) == 5 * 14 + 35)
-        s.undos = 2
-        #expect(E.score(s) == 70 + 35 - 6)
-        s.elapsed = 600
-        #expect(E.score(s) == 70 + 35 - 6, "time only costs the win's bonus")
-        s.redeals = 1
-        #expect(E.score(s) == 0, "a redeal costs more than these cards earned")
-        s.foundations[2] = (1...13).map { Card(suit: .diamonds, rank: $0, isFaceUp: true) }   // another suit
-        #expect(E.score(s) == 5 * 27 + 70 - 6 - 100, "a redeal's cost is still owed after the floor")
-        s.foundations[0].removeLast()                                                          // the king back off
-        #expect(E.score(s) == 5 * 26 + 35 - 6 - 100, "the card's 5 and the suit's 35 go")
-    }
-
-    @Test func neverBelowZero() {
-        var s = E.newGame(drawCount: 3, seed: 3)
-        s.redeals = 9
-        #expect(E.score(s) == 0)
-    }
-
-    /// The bonus comes only with the win, and on top of everything the play earned.
-    @Test func theTimeBonusComesWithTheWin() {
-        var s = E.newGame(drawCount: 1, seed: 3)
-        s.foundations = Suit.allCases.map { suit in (1...13).map { Card(suit: suit, rank: $0, isFaceUp: true) } }
-        s.tableau = Array(repeating: [], count: 7); s.stock = []; s.waste = []
-        s.undos = 2; s.redeals = 1; s.elapsed = 200
-        #expect(E.playScore(s) == 400 - 6 - 100)
-        #expect(E.score(s) == 294 + 600 - E.timePenalty(seconds: 200))
-        s.foundations[3].removeLast()
-        #expect(!E.isWon(s) && E.score(s) == E.playScore(s), "no win, no bonus")
-    }
-
-    @Test func olderSavesHaveNoUndos() throws {
-        var s = E.newGame(drawCount: 1, seed: 7)
-        s.undos = 5
-        let data = try JSONEncoder().encode(s)
-        var object = try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
-        object.removeValue(forKey: "undos")
-        let old = try JSONDecoder().decode(GameState.self, from: JSONSerialization.data(withJSONObject: object))
-        #expect(old.undos == 0)
-        #expect(try JSONDecoder().decode(GameState.self, from: data) == s)
-    }
-}
-
-// MARK: - Restart (spec "Restart")
-
-@Suite struct Restarting {
-    @Test func theSameDealFromTheStartMarkedRestarted() throws {
-        var s = E.newGame(drawCount: 3, seed: 11, hardCore: true)
-        let fresh = s
-        s.stock.removeLast(3); s.moveCount = 9; s.elapsed = 75; s.undos = 2; s.redeals = 1
-        let again = E.restart(s)
-        #expect(again.isRestarted)
-        var unmarked = again
-        unmarked.isRestarted = false
-        #expect(unmarked == fresh, "the same cards, mode and Hard Core, with nothing played")
-        #expect(!fresh.isRestarted && !E.newGame(drawCount: 1, seed: 11).isRestarted)
-    }
-
-    /// A restarted game scores 0, however it is played — a win included.
-    @Test func aRestartedGameScoresZero() {
-        var s = E.restart(E.newGame(drawCount: 1, seed: 3))
-        s.foundations = Suit.allCases.map { suit in (1...13).map { Card(suit: suit, rank: $0, isFaceUp: true) } }
-        s.tableau = Array(repeating: [], count: 7); s.stock = []; s.waste = []
-        s.elapsed = 30
-        #expect(E.isWon(s) && E.playScore(s) == 0 && E.score(s) == 0)
-        s.isRestarted = false
-        #expect(E.score(s) == 1000, "the same win, not restarted")
-    }
-
-    @Test func theMarkIsSavedAndOlderSavesWereNeverRestarted() throws {
-        let s = E.restart(E.newGame(drawCount: 1, seed: 7))
-        let data = try JSONEncoder().encode(s)
-        #expect(try JSONDecoder().decode(GameState.self, from: data) == s)
-        var object = try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
-        object.removeValue(forKey: "isRestarted")
-        let old = try JSONDecoder().decode(GameState.self, from: JSONSerialization.data(withJSONObject: object))
-        #expect(!old.isRestarted)
+    @Test func aGameSavesAndLoadsExactly() throws {
+        var s = E.newGame(number: 617, hardCore: true)
+        s.cells[1] = s.tableau[3].removeLast()
+        s.moveCount = 4; s.elapsed = 33; s.undos = 1; s.isRestarted = true
+        let back = try JSONDecoder().decode(GameState.self, from: JSONEncoder().encode(s))
+        #expect(back == s)
     }
 }

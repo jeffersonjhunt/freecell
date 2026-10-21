@@ -1,79 +1,61 @@
 @testable import FreeCellEngine
 
-/// "AS", "10H", "KD" → a face-up card; `down("3C")` → face down.
-func up(_ code: String) -> Card { parse(code, faceUp: true) }
-func down(_ code: String) -> Card { parse(code, faceUp: false) }
+typealias E = FreeCellEngine
 
-private func parse(_ code: String, faceUp: Bool) -> Card {
-    let suitChar = code.last!
+/// "AS", "10H" or "TH", "KD" → a card.
+func c(_ code: String) -> Card {
+    let suit: Suit = ["C": .clubs, "D": .diamonds, "H": .hearts, "S": .spades][code.last!]!
     let rankText = String(code.dropLast())
-    let rank = ["A": 1, "J": 11, "Q": 12, "K": 13][rankText] ?? Int(rankText)!
-    let suit: Suit = ["S": .spades, "H": .hearts, "D": .diamonds, "C": .clubs][suitChar]!
-    return Card(suit: suit, rank: rank, isFaceUp: faceUp)
+    let rank = ["A": 1, "T": 10, "J": 11, "Q": 12, "K": 13][rankText] ?? Int(rankText)!
+    return Card(suit: suit, rank: rank)
+}
+
+/// "JD 2D 9H" → cards.
+func cards(_ codes: String) -> [Card] { codes.split(separator: " ").map { c(String($0)) } }
+
+/// A card's two-character name as the published deals write it: "TC", "AH".
+func name(_ card: Card) -> String {
+    let ranks = Array("A23456789TJQK")
+    return "\(ranks[card.rank - 1])\(["C", "D", "H", "S"][card.suit.rawValue])"
 }
 
 /// A hand-built position; unspecified piles are empty.
-func board(tableau: [[Card]] = [], waste: [Card] = [], stock: [Card] = [],
-           foundations: [[Card]] = [], drawCount: Int = 1) -> GameState {
-    GameState(stock: stock, waste: waste,
-              foundations: foundations + Array(repeating: [], count: 4 - foundations.count),
-              tableau: tableau + Array(repeating: [], count: 7 - tableau.count),
-              drawCount: drawCount)
+func board(columns: [[Card]] = [], cells: [Card?] = [], foundations: [[Card]] = [],
+           hardCore: Bool = false, number: Int = 1) -> GameState {
+    let cellCount = E.cellCount(hardCore: hardCore)
+    return GameState(cells: cells + Array(repeating: nil, count: cellCount - cells.count),
+                     foundations: foundations + Array(repeating: [], count: 4 - foundations.count),
+                     tableau: columns + Array(repeating: [], count: 8 - columns.count),
+                     number: number, isHardCore: hardCore)
 }
 
-/// A foundation holding ace...rank of a suit.
+/// A foundation holding ace…rank of a suit.
 func foundation(_ suit: Suit, upTo rank: Int) -> [Card] {
-    (1...rank).map { Card(suit: suit, rank: $0, isFaceUp: true) }
+    rank == 0 ? [] : (1...rank).map { Card(suit: suit, rank: $0) }
 }
 
 func allCards(_ s: GameState) -> [Card] {
-    s.stock + s.waste + s.foundations.flatMap { $0 } + s.tableau.flatMap { $0 }
+    s.cells.compactMap { $0 } + s.foundations.flatMap { $0 } + s.tableau.flatMap { $0 }
 }
 
-/// Every move the rules allow in `s` (excluding the stock tap).
+/// Every move the rules allow in `s`.
 func legalMoves(_ s: GameState) -> [Move] {
-    var sources: [(PileID, Int)] = []
-    if !s.waste.isEmpty { sources.append((.waste, s.waste.count - 1)) }
-    for f in 0..<4 where !s.foundations[f].isEmpty { sources.append((.foundation(f), s.foundations[f].count - 1)) }
-    for t in 0..<7 { for i in s.tableau[t].indices { sources.append((.tableau(t), i)) } }
-    let destinations: [PileID] = (0..<4).map { .foundation($0) } + (0..<7).map { .tableau($0) }
-    return sources.flatMap { src, i in
-        destinations.map { Move(source: src, index: i, destination: $0) }
-    }.filter { FreeCellEngine.canMove($0, in: s) }
+    var sources: [(PileID, Int)] = s.cells.indices.map { (.cell($0), 0) }
+    for t in 0..<8 { for i in s.tableau[t].indices { sources.append((.tableau(t), i)) } }
+    let destinations: [PileID] = s.cells.indices.map { .cell($0) } + (0..<4).map { .foundation($0) }
+        + (0..<8).map { .tableau($0) }
+    return sources.flatMap { src, i in destinations.map { Move(source: src, index: i, destination: $0) } }
+        .filter { E.canMove($0, in: s) }
 }
 
-/// A simple deterministic player, good enough to find winnable deals: foundation moves first,
-/// then tableau moves that uncover a card, then waste plays, then the stock. Gives up after
-/// three passes through the stock without progress. Returns the final state.
-func playGreedily(_ start: GameState, stepLimit: Int = 5000) -> GameState {
-    var s = start
-    var idleRedeals = 0
-    for _ in 0..<stepLimit {
-        if s.isWon { break }
-        if FreeCellEngine.canAutoFinish(s), let m = FreeCellEngine.nextAutoFinishMove(in: s) {
-            FreeCellEngine.apply(m, to: &s); continue
-        }
-        let moves = legalMoves(s)
-        let toFoundation = moves.first {
-            if case .foundation = $0.destination { return true } else { return false }
-        }
-        let uncovering = moves.first { m in
-            guard case .tableau(let t) = m.source, case .tableau = m.destination else { return false }
-            return m.index > 0 && !s.tableau[t][m.index - 1].isFaceUp
-        }
-        let fromWaste = moves.first { m in
-            if case .waste = m.source, case .tableau = m.destination { return true } else { return false }
-        }
-        if let m = toFoundation ?? uncovering ?? fromWaste {
-            FreeCellEngine.apply(m, to: &s)
-            idleRedeals = 0
-            continue
-        }
-        if s.stock.isEmpty {
-            if s.waste.isEmpty || idleRedeals >= 3 { break }
-            idleRedeals += 1
-        }
-        FreeCellEngine.drawFromStock(&s)
+/// A repeatable generator for tests.
+struct SeededGenerator: RandomNumberGenerator {
+    var state: UInt64
+    mutating func next() -> UInt64 {
+        state &+= 0x9E37_79B9_7F4A_7C15
+        var z = state
+        z = (z ^ (z >> 30)) &* 0xBF58_476D_1CE4_E5B9
+        z = (z ^ (z >> 27)) &* 0x94D0_49BB_1331_11EB
+        return z ^ (z >> 31)
     }
-    return s
 }

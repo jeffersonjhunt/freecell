@@ -1,219 +1,214 @@
 import Foundation
 
-/// Standard Klondike as pure functions over `GameState`. No function throws for a rejected move:
-/// it returns `nil` or `false`, so the UI can simply not animate.
+/// FreeCell as pure functions over `GameState` (spec "Game rules"). No function throws for a
+/// rejected move: it returns `nil` or `false`, so the UI can simply not animate.
 public enum FreeCellEngine {
 
-    // MARK: Deal
+    // MARK: Game numbers and the deal
 
-    /// A fresh deal: column i gets i+1 cards with only its last card face up; the other 24 cards
-    /// form the stock, face down. `hardCore`: passes through the deck are limited.
-    /// The same deal again from the start (spec "Restart"): the same cards, draw mode and Hard
-    /// Core, with moves, time, passes and undos back to none — marked restarted, so it scores 0.
+    /// Every game number: Microsoft's numbering, as far as the first million.
+    public static let numbers = 1...1_000_000
+
+    /// The only numbers among the first million that can't be won (11982 is the only one of the
+    /// original 32,000). New Game never deals them; they can still be chosen by number.
+    public static let unwinnable: Set<Int> = [11982, 146692, 186216, 455889, 495505, 512118, 517776, 781948]
+
+    /// Free cells in a game: four, or two in Hard Core.
+    public static func cellCount(hardCore: Bool) -> Int { hardCore ? 2 : 4 }
+
+    /// Microsoft's deal for `number`: a deck in rank-major order (A♣ A♦ A♥ A♠ 2♣ … K♠), a linear
+    /// congruential generator seeded with the number, each card taken at `draw mod (cards left)`
+    /// with the last card swapped into its place, dealt across eight columns a row at a time.
+    public static func deal(number: Int) -> [[Card]] {
+        var deck = (0..<52).map { Card(suit: Suit(rawValue: $0 % 4)!, rank: $0 / 4 + 1) }
+        var state = UInt32(truncatingIfNeeded: number)
+        var columns = Array(repeating: [Card](), count: 8)
+        var dealt = 0
+        while !deck.isEmpty {
+            state = (state &* 214013 &+ 2531011) & 0x7FFF_FFFF
+            let j = Int(state >> 16) % deck.count
+            columns[dealt % 8].append(deck[j])
+            deck[j] = deck[deck.count - 1]
+            deck.removeLast()
+            dealt += 1
+        }
+        return columns
+    }
+
+    public static func newGame(number: Int, hardCore: Bool = false) -> GameState {
+        precondition(numbers.contains(number), "game numbers run from 1 to 1,000,000")
+        return GameState(cells: Array(repeating: nil, count: cellCount(hardCore: hardCore)),
+                         foundations: Array(repeating: [], count: 4), tableau: deal(number: number),
+                         number: number, isHardCore: hardCore)
+    }
+
+    /// This game again from the start (spec "Restart"): the same number and Hard Core, with moves,
+    /// time and undos back to none — marked restarted, so its win is never recorded.
     public static func restart(_ state: GameState) -> GameState {
-        var fresh = newGame(drawCount: state.drawCount, seed: state.seed, hardCore: state.isHardCore)
+        var fresh = newGame(number: state.number, hardCore: state.isHardCore)
         fresh.isRestarted = true
         return fresh
     }
 
-    public static func newGame(drawCount: Int, seed: UInt64, hardCore: Bool = false) -> GameState {
-        precondition(drawCount == 1 || drawCount == 3, "drawCount must be 1 or 3")
-        var deck = Suit.allCases.flatMap { suit in (1...13).map { Card(suit: suit, rank: $0) } }
-        var rng = SplitMix64(seed: seed)
-        deck.seededShuffle(using: &rng)
-
-        var tableau = Array(repeating: [Card](), count: 7)
-        for column in 0..<7 {
-            for _ in 0...column {
-                tableau[column].append(deck.removeLast())
-            }
-            tableau[column][column].isFaceUp = true
+    /// A game number for New Game: any in range except the eight that can't be won.
+    public static func randomNumber<G: RandomNumberGenerator>(using generator: inout G) -> Int {
+        while true {
+            let n = Int.random(in: numbers, using: &generator)
+            if !unwinnable.contains(n) { return n }
         }
-        return GameState(stock: deck, waste: [], foundations: Array(repeating: [], count: 4),
-                         tableau: tableau, drawCount: drawCount, seed: seed, isHardCore: hardCore)
     }
 
     // MARK: Moves
 
     /// Once the game is won nothing moves any more, so a won game cannot be un-won.
     public static func canMove(_ move: Move, in state: GameState) -> Bool {
-        guard !state.isWon, let run = movableRun(from: move.source, index: move.index, in: state),
-              let first = run.first,
-              move.source != move.destination else { return false }
+        guard !state.isWon, move.source != move.destination,
+              let run = movableRun(from: move.source, index: move.index, in: state),
+              let first = run.first else { return false }
 
         switch move.destination {
-        case .stock, .waste:
+        case .cell(let c):
+            // One card from a column into an empty cell; never cell to cell.
+            guard state.cells.indices.contains(c), state.cells[c] == nil, run.count == 1 else { return false }
+            if case .tableau = move.source { return true }
             return false
 
         case .foundation(let f):
             guard (0..<4).contains(f), run.count == 1 else { return false }
-            // Only the waste top and a column's last card go up; foundation-to-foundation is not
-            // a Klondike move.
-            if case .foundation = move.source { return false }
             return canPlaceOnFoundation(first, state.foundations[f])
 
         case .tableau(let t):
-            guard (0..<7).contains(t) else { return false }
-            guard let top = state.tableau[t].last else { return first.rank == 13 }
-            return top.isFaceUp && first.rank == top.rank - 1 && first.suit.isRed != top.suit.isRed
+            guard (0..<8).contains(t), run.count <= maxRun(onto: .tableau(t), in: state) else { return false }
+            guard let top = state.tableau[t].last else { return true }
+            return first.rank == top.rank - 1 && first.suit.isRed != top.suit.isRed
         }
     }
 
-    /// Applies a legal move. The card it uncovers in the source column, if face down, flips face up
-    /// as part of the same move (one undo step, one move count).
+    /// Applies a legal move as the player's: it counts as one move, however many cards it carries.
     public static func apply(_ move: Move, to state: inout GameState) {
+        applyAutomatic(move, to: &state)
+        state.moveCount += 1
+    }
+
+    /// Applies a legal move the game makes by itself — an automatic play home, or a Finish step:
+    /// it costs no move.
+    public static func applyAutomatic(_ move: Move, to state: inout GameState) {
         precondition(canMove(move, in: state), "apply called with an illegal move: \(move)")
         let run = Array(state[move.source][move.index...])
         state[move.source].removeSubrange(move.index...)
         state[move.destination].append(contentsOf: run)
-        if case .tableau(let t) = move.source, let last = state.tableau[t].indices.last,
-           !state.tableau[t][last].isFaceUp {
-            state.tableau[t][last].isFaceUp = true
-        }
-        state.moveCount += 1
         state.isWon = isWon(state)
     }
 
-    /// Tapping the stock: draw `drawCount` cards (fewer if the stock runs short) onto the waste,
-    /// face up; with the stock empty, turn the waste back over into the stock. Either counts as
-    /// one move. With both empty, or once the game is won, it does nothing.
-    /// The stock is empty, the waste is not, and a pass remains (Hard Core limits them).
-    public static func canRedeal(_ state: GameState) -> Bool {
-        guard !state.isWon, state.stock.isEmpty, !state.waste.isEmpty else { return false }
-        return state.maxPasses.map { state.passes < $0 } ?? true
-    }
-
-    /// Hard Core with its passes used up: the stock is empty, the waste is not, and no redeal is
-    /// left (the stock shows ✕).
-    public static func isOutOfPasses(_ state: GameState) -> Bool {
-        !state.isWon && state.stock.isEmpty && !state.waste.isEmpty && !canRedeal(state)
-    }
-
-    public static func drawFromStock(_ state: inout GameState) {
-        guard !state.isWon else { return }
-        if state.stock.isEmpty {
-            guard canRedeal(state) else { return }               // nothing to turn over, or no pass left
-            state.stock = state.waste.reversed().map { card in
-                var c = card
-                c.isFaceUp = false
-                return c
-            }
-            state.waste = []
-            state.redeals += 1
-        } else {
-            for _ in 0..<min(state.drawCount, state.stock.count) {
-                var card = state.stock.removeLast()
-                card.isFaceUp = true
-                state.waste.append(card)
-            }
+    /// The longest run that may move onto `destination` at once: the cards the free spaces could
+    /// carry one by one — (empty free cells + 1) × 2^(empty columns), the empty columns counted
+    /// without the destination.
+    public static func maxRun(onto destination: PileID, in state: GameState) -> Int {
+        var emptyColumns = state.emptyColumns
+        if case .tableau(let t) = destination, state.tableau.indices.contains(t), state.tableau[t].isEmpty {
+            emptyColumns -= 1
         }
-        state.moveCount += 1
+        return (state.emptyCells + 1) << max(emptyColumns, 0)
     }
 
-    /// Whether the card at `index` in `source` may be picked up (dragged): a face-up card with a
-    /// built run on top of it in a column, or the top card of the waste or a foundation. Never the
-    /// stock, and nothing once the game is won.
+    /// Whether the card at `index` in `source` may be picked up (dragged): a free cell's card, or a
+    /// column card with an ordered run below it. Never a foundation card, and nothing once won.
+    /// (A run too long for the free spaces may be lifted; the drop is refused.)
     public static func canPickUp(from source: PileID, index: Int, in state: GameState) -> Bool {
         !state.isWon && movableRun(from: source, index: index, in: state) != nil
     }
 
     // MARK: Tap-to-move
 
-    /// Where a tap on the card at `index` in `source` sends it (with the run above it), or nil.
+    /// Where a tap on the card at `index` in `source` sends it (with the run below it), or nil.
     ///
-    /// In order: a foundation, if it is a single card; then a non-empty tableau column that accepts
-    /// the run, scanning left to right starting after the source column; then an empty column —
-    /// unless the run already sits alone at the bottom of a column, which would be a no-op.
-    ///
-    /// A tap on a foundation card does nothing: taps send cards toward the foundations, and a
-    /// missed tap must never pull one back down. Taking a card off a foundation is drag-only.
+    /// In order: its foundation, if it is one card; a column that accepts it, scanning left to right
+    /// from the column after its own; a free cell, if it is one card from a column; an empty column —
+    /// never for a card already alone in its column, which would change nothing. Cards on a
+    /// foundation never move.
     public static func autoDestination(for source: PileID, index: Int, in state: GameState) -> PileID? {
-        if case .foundation = source { return nil }
-        guard let run = movableRun(from: source, index: index, in: state) else { return nil }
+        guard !state.isWon, let run = movableRun(from: source, index: index, in: state) else { return nil }
+        let legal = { (to: PileID) in canMove(Move(source: source, index: index, destination: to), in: state) }
 
-        if run.count == 1 {
-            for f in 0..<4 where canMove(Move(source: source, index: index, destination: .foundation(f)), in: state) {
-                return .foundation(f)
-            }
+        if run.count == 1, let f = (0..<4).first(where: { legal(.foundation($0)) }) {
+            return .foundation(f)
         }
-
         let start: Int
         if case .tableau(let s) = source { start = s + 1 } else { start = 0 }
-        let order = (0..<7).map { (start + $0) % 7 }
-
-        for t in order where !state.tableau[t].isEmpty
-            && canMove(Move(source: source, index: index, destination: .tableau(t)), in: state) {
+        let order = (0..<8).map { (start + $0) % 8 }
+        if let t = order.first(where: { !state.tableau[$0].isEmpty && legal(.tableau($0)) }) {
             return .tableau(t)
         }
-
+        if let c = state.cells.indices.first(where: { legal(.cell($0)) }) {
+            return .cell(c)
+        }
         if case .tableau = source, index == 0 { return nil }
-        for t in order where state.tableau[t].isEmpty
-            && canMove(Move(source: source, index: index, destination: .tableau(t)), in: state) {
+        if let t = order.first(where: { state.tableau[$0].isEmpty && legal(.tableau($0)) }) {
             return .tableau(t)
         }
         return nil
     }
 
-    // MARK: Auto-finish and winning
+    // MARK: Automatic plays home
 
-    /// Offered when the stock and waste are empty and every tableau card is face up — the game
-    /// can then always be finished.
-    public static func canAutoFinish(_ state: GameState) -> Bool {
-        !state.isWon && state.stock.isEmpty && state.waste.isEmpty
-            && state.tableau.allSatisfy { $0.allSatisfy(\.isFaceUp) }
+    /// Whether no other card could still need `card`: an ace or a two always; any other card once
+    /// both foundations of the other colour have reached at least one rank lower.
+    public static func isSafeToPlayHome(_ card: Card, in state: GameState) -> Bool {
+        if card.rank <= 2 { return true }
+        let others = Suit.allCases.filter { $0.isRed != card.suit.isRed }
+        return others.allSatisfy { foundationRank(of: $0, in: state) >= card.rank - 1 }
     }
 
-    /// The next auto-finish step: the lowest-ranked card that can go to a foundation (leftmost
-    /// column on a tie), or nil when none can.
+    /// The next automatic play: a safe card from a free cell or the end of a column that can go
+    /// home now (free cells first, then columns left to right), or nil.
+    public static func nextSafePlay(in state: GameState) -> Move? {
+        guard !state.isWon else { return nil }
+        let sources: [PileID] = state.cells.indices.map { .cell($0) } + (0..<8).map { .tableau($0) }
+        for source in sources {
+            guard let card = state[source].last, isSafeToPlayHome(card, in: state) else { continue }
+            let index = state[source].count - 1
+            if let f = (0..<4).first(where: { canMove(Move(source: source, index: index, destination: .foundation($0)), in: state) }) {
+                return Move(source: source, index: index, destination: .foundation(f))
+            }
+        }
+        return nil
+    }
+
+    /// Every automatic play, one after another, until none is left. Returns the moves made.
+    @discardableResult
+    public static func settle(_ state: inout GameState) -> [Move] {
+        var made: [Move] = []
+        while let move = nextSafePlay(in: state) {
+            applyAutomatic(move, to: &state)
+            made.append(move)
+        }
+        return made
+    }
+
+    // MARK: Finish and winning
+
+    /// Offered once every column is in order — each card lower than the one above it — so every
+    /// remaining card can go home without help.
+    public static func canAutoFinish(_ state: GameState) -> Bool {
+        !state.isWon && state.tableau.allSatisfy { column in
+            zip(column, column.dropFirst()).allSatisfy { upper, lower in lower.rank < upper.rank }
+        }
+    }
+
+    /// The next Finish step: the lowest card that can go to a foundation now, from a free cell or
+    /// the end of a column (cells first, then columns left to right, on a tie), or nil.
     public static func nextAutoFinishMove(in state: GameState) -> Move? {
+        guard !state.isWon else { return nil }
         var best: (move: Move, rank: Int)?
-        for t in 0..<7 {
-            guard let card = state.tableau[t].last else { continue }
-            let index = state.tableau[t].count - 1
-            for f in 0..<4 {
-                let move = Move(source: .tableau(t), index: index, destination: .foundation(f))
-                if canMove(move, in: state), best == nil || card.rank < best!.rank {
-                    best = (move, card.rank)
-                    break
-                }
+        let sources: [PileID] = state.cells.indices.map { .cell($0) } + (0..<8).map { .tableau($0) }
+        for source in sources {
+            guard let card = state[source].last, best == nil || card.rank < best!.rank else { continue }
+            let index = state[source].count - 1
+            if let f = (0..<4).first(where: { canMove(Move(source: source, index: index, destination: .foundation($0)), in: state) }) {
+                best = (Move(source: source, index: index, destination: .foundation(f)), card.rank)
             }
         }
         return best?.move
-    }
-
-    // MARK: Scoring (spec "Scoring")
-
-    /// The most a win's time bonus can be: all of it, under a minute.
-    public static let maxTimeBonus = 600
-
-    /// The score: the play score, plus the time bonus once the game is won. A restarted game
-    /// scores 0.
-    public static func score(_ state: GameState) -> Int {
-        guard !state.isRestarted else { return 0 }
-        return playScore(state) + (isWon(state) ? timeBonus(seconds: Int(state.elapsed)) : 0)
-    }
-
-    /// The points earned in play, worked out from the game itself: +5 per card on a foundation,
-    /// +35 per complete suit, −3 per undo, −100 per redeal; never below 0.
-    public static func playScore(_ state: GameState) -> Int {
-        guard !state.isRestarted else { return 0 }
-        let onFoundations = state.foundations.reduce(0) { $0 + $1.count }
-        let suits = state.foundations.filter { $0.count == 13 }.count
-        return max(5 * onFoundations + 35 * suits - 3 * state.undos - 100 * state.redeals, 0)
-    }
-
-    /// What a win adds for its time: 600 less the time penalty, never below 0.
-    public static func timeBonus(seconds: Int) -> Int {
-        max(maxTimeBonus - timePenalty(seconds: seconds), 0)
-    }
-
-    /// Free for the first minute; then 1 point a second in the second minute, 2 in the third, and so
-    /// on: 60 by 2:00, 180 by 3:00, 600 by 5:00.
-    public static func timePenalty(seconds: Int) -> Int {
-        guard seconds > 60 else { return 0 }
-        let past = seconds - 60
-        let minutes = past / 60, rest = past % 60
-        return 60 * minutes * (minutes + 1) / 2 + rest * (minutes + 1)
     }
 
     public static func isWon(_ state: GameState) -> Bool {
@@ -223,25 +218,21 @@ public enum FreeCellEngine {
     // MARK: Helpers
 
     /// The cards that would move if `index` in `source` were picked up — a slice, so it keeps the
-    /// pile's indices (use `first`, never `[0]`) — if picking it up is allowed at all: only the top card of the waste or a foundation, and from a column only a
-    /// face-up card together with the (properly built) run on top of it.
+    /// pile's indices (use `first`, never `[0]`) — or nil: a free cell's card, or a column card
+    /// with the cards below it in order (each one rank lower and the other colour). Never a
+    /// foundation card.
     static func movableRun(from source: PileID, index: Int, in state: GameState) -> ArraySlice<Card>? {
         switch source {
-        case .stock:
+        case .foundation:
             return nil
-        case .waste:
-            guard index == state.waste.count - 1, index >= 0 else { return nil }
-        case .foundation(let f):
-            // Redundant with the built-run check below (a foundation ascends in one suit, so any
-            // slice of two or more is never a built run) — kept so the rule reads as stated.
-            guard (0..<4).contains(f), index == state.foundations[f].count - 1, index >= 0 else { return nil }
+        case .cell(let c):
+            guard state.cells.indices.contains(c), index == 0, state.cells[c] != nil else { return nil }
         case .tableau(let t):
-            guard (0..<7).contains(t), state.tableau[t].indices.contains(index) else { return nil }
+            guard (0..<8).contains(t), state.tableau[t].indices.contains(index) else { return nil }
         }
         let run = state[source][index...]
-        guard run.allSatisfy(\.isFaceUp) else { return nil }
-        for (lower, upper) in zip(run, run.dropFirst())
-        where upper.rank != lower.rank - 1 || upper.suit.isRed == lower.suit.isRed {
+        for (upper, lower) in zip(run, run.dropFirst())
+        where lower.rank != upper.rank - 1 || lower.suit.isRed == upper.suit.isRed {
             return nil
         }
         return run
@@ -250,5 +241,10 @@ public enum FreeCellEngine {
     static func canPlaceOnFoundation(_ card: Card, _ foundation: [Card]) -> Bool {
         guard let top = foundation.last else { return card.rank == 1 }
         return card.suit == top.suit && card.rank == top.rank + 1
+    }
+
+    /// How far a suit's foundation has reached: 0 before its ace.
+    static func foundationRank(of suit: Suit, in state: GameState) -> Int {
+        state.foundations.first { $0.first?.suit == suit }?.count ?? 0
     }
 }
