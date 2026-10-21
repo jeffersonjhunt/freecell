@@ -34,7 +34,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-BUNDLE_ID = "com.oneoffendeavors.solitaire"
+BUNDLE_ID = "com.oneoffendeavors.freecell"
 ENV_FILE = os.environ.get("ASC_ENV") or os.path.join(os.environ["HOME"], ".config/appstoreconnect/api.env")
 
 
@@ -119,7 +119,7 @@ def bundle_id(create):
         print(f"{d['attributes']['identifier']}  {d['attributes']['platform']}  team {d['attributes']['seedId']}")
     if not data and create:
         status, d = call("POST", "/v1/bundleIds", {"data": {"type": "bundleIds", "attributes": {
-            "identifier": BUNDLE_ID, "name": "Solitaire", "platform": "UNIVERSAL"}}})
+            "identifier": BUNDLE_ID, "name": "FreeCell", "platform": "UNIVERSAL"}}})
         if status != 201:
             sys.exit(f"could not register {BUNDLE_ID}: {status} {json.dumps(d.get('errors', d))[:400]}")
         print(f"registered {BUNDLE_ID} (UNIVERSAL)")
@@ -129,12 +129,12 @@ def bundle_id(create):
 
 # Spec "Scores": one board per draw mode and difficulty, each player's best kept, highest first.
 LEADERBOARDS = [
-    ("com.oneoffendeavors.solitaire.draw1", "Draw 1"),
-    ("com.oneoffendeavors.solitaire.draw3", "Draw 3"),
-    ("com.oneoffendeavors.solitaire.draw1.hardcore", "Draw 1 · Hard Core"),
-    ("com.oneoffendeavors.solitaire.draw3.hardcore", "Draw 3 · Hard Core"),
+    ("com.oneoffendeavors.freecell.draw1", "Draw 1"),
+    ("com.oneoffendeavors.freecell.draw3", "Draw 3"),
+    ("com.oneoffendeavors.freecell.draw1.hardcore", "Draw 1 · Hard Core"),
+    ("com.oneoffendeavors.freecell.draw3.hardcore", "Draw 3 · Hard Core"),
 ]
-LEADERBOARD_SET = ("com.oneoffendeavors.solitaire.leaderboards", "Solitaire")
+LEADERBOARD_SET = ("com.oneoffendeavors.freecell.leaderboards", "FreeCell")
 CAPABILITIES = {
     "GAME_CENTER": None,
     "ICLOUD": [{"key": "ICLOUD_VERSION", "options": [{"key": "XCODE_6"}]}],
@@ -189,7 +189,7 @@ def gamecenter(create):
         if vendor in boards or not create:
             continue
         board = post("/v1/gameCenterLeaderboards", {"data": {"type": "gameCenterLeaderboards", "attributes": {
-            "referenceName": f"Solitaire — {name}", "vendorIdentifier": vendor, "defaultFormatter": "INTEGER",
+            "referenceName": f"FreeCell — {name}", "vendorIdentifier": vendor, "defaultFormatter": "INTEGER",
             "submissionType": "BEST_SCORE", "scoreSortType": "DESC", "scoreRangeStart": "0",
             "scoreRangeEnd": "1000"}, "relationships": {"gameCenterDetail": rel("gameCenterDetails", detail_id)}}},
             f"leaderboard {name}")["data"]["id"]

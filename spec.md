@@ -1,3 +1,7 @@
+> **Inherited from One Off Solitaire 1.1, not yet FreeCell's.** This repo began as a copy of
+> `jeffersonjhunt/solitaire` at `b6c5be9`. Everything below describes Klondike and is rewritten for
+> FreeCell in unit F1; until then the code still plays Klondike under the FreeCell name.
+
 # Solitaire for Apple platforms — build specification
 
 Sep 27, 2026 · @Jefferson

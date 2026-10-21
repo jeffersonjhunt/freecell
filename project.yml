@@ -1,7 +1,7 @@
 # XcodeGen spec — the source of truth. The .xcodeproj is generated from it (and gitignored):
 # `make` on the Mac and the apple-xcodebuild skill's xc-build.py both regenerate it before every
 # build, using the XcodeGen pinned in .xcodegen-version (built once into a shared cache on the Mac).
-name: Solitaire
+name: FreeCell
 options:
   bundleIdPrefix: com.oneoffendeavors
   deploymentTarget:
@@ -9,30 +9,30 @@ options:
     macOS: "14.0"
   createIntermediateGroups: true
 packages:
-  SolitaireEngine:
-    path: Packages/SolitaireEngine
+  FreeCellEngine:
+    path: Packages/FreeCellEngine
 settings:
   base:
     SWIFT_VERSION: "6.0"
     # The version testers and the store see. The build number (CURRENT_PROJECT_VERSION) must rise
     # with every upload: `make archive` sets it from the UTC time; "1" is only for local builds.
-    MARKETING_VERSION: "1.1"
+    MARKETING_VERSION: "1.0"
     CURRENT_PROJECT_VERSION: "1"
 targets:
-  Solitaire:
+  FreeCell:
     type: application
     supportedDestinations: [iOS, macOS]
     sources:
-      - Sources/Solitaire
+      - Sources/FreeCell
       - Resources
     dependencies:
-      - package: SolitaireEngine
+      - package: FreeCellEngine
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.oneoffendeavors.solitaire
-        PRODUCT_NAME: Solitaire
+        PRODUCT_BUNDLE_IDENTIFIER: com.oneoffendeavors.freecell
+        PRODUCT_NAME: FreeCell
         GENERATE_INFOPLIST_FILE: YES
-        INFOPLIST_KEY_CFBundleDisplayName: Solitaire
+        INFOPLIST_KEY_CFBundleDisplayName: FreeCell
         # App Store: no encryption beyond what the OS provides (the app has no network code), so each
         # upload skips the export-compliance questions; and the Mac App Store needs a category.
         INFOPLIST_KEY_ITSAppUsesNonExemptEncryption: NO
@@ -41,7 +41,7 @@ targets:
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
         ENABLE_PREVIEWS: YES
         # Game Center and iCloud's key-value store (spec "Scores"); everything else is the defaults.
-        CODE_SIGN_ENTITLEMENTS: Config/Solitaire.entitlements
+        CODE_SIGN_ENTITLEMENTS: Config/FreeCell.entitlements
         # Mac: App Sandbox, plus outgoing connections — Game Center needs them (since 1.1 the app is
         # no longer network-free: Game Center and iCloud, both Apple's; still no network code of
         # its own and nothing incoming).
@@ -55,30 +55,30 @@ targets:
         INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad: "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"
     scheme:
       testTargets:
-        - SolitaireTests
-        - SolitaireUITests
-  SolitaireTests:
+        - FreeCellTests
+        - FreeCellUITests
+  FreeCellTests:
     type: bundle.unit-test
     supportedDestinations: [iOS, macOS]
     sources:
-      - Tests/SolitaireTests
+      - Tests/FreeCellTests
     dependencies:
-      - target: Solitaire
+      - target: FreeCell
     settings:
       base:
         GENERATE_INFOPLIST_FILE: YES
         # XcodeGen derives TEST_HOST from the iOS bundle layout (App.app/App) for every
         # destination; a macOS app keeps its binary under Contents/MacOS.
-        TEST_HOST[sdk=macosx*]: $(BUILT_PRODUCTS_DIR)/Solitaire.app/Contents/MacOS/Solitaire
+        TEST_HOST[sdk=macosx*]: $(BUILT_PRODUCTS_DIR)/FreeCell.app/Contents/MacOS/FreeCell
         BUNDLE_LOADER[sdk=macosx*]: $(TEST_HOST)
-  SolitaireUITests:
+  FreeCellUITests:
     type: bundle.ui-testing
     supportedDestinations: [iOS, macOS]
     sources:
-      - Tests/SolitaireUITests
+      - Tests/FreeCellUITests
     dependencies:
-      - target: Solitaire
+      - target: FreeCell
     settings:
       base:
         GENERATE_INFOPLIST_FILE: YES
-        TEST_TARGET_NAME: Solitaire
+        TEST_TARGET_NAME: FreeCell
