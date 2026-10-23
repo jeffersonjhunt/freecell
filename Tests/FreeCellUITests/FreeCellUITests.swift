@@ -146,6 +146,10 @@ final class FreeCellUITests: XCTestCase {
         king.drag(to: element(app, "Column 2, empty"), grabAt: 0.08)          // its visible strip
         sleep(1)
         XCTAssertTrue(element(app, "King of Spades, column 1").exists, "thirteen cards: refused, back in column 1")
+        let notice = app.descendants(matching: .any)["runLimitNotice"]
+        XCTAssertTrue(notice.exists || notice.waitForExistence(timeout: 2), "the board says why")
+        let said = notice.label.isEmpty ? "\(notice.value ?? "")" : notice.label
+        XCTAssertEqual(said, "Only 5 cards can move into an empty column — 4 free cells, no other empty column")
         XCTAssertTrue(element(app, "Column 2, empty").exists)
         element(app, "5 of Spades, column 1").drag(to: element(app, "Column 2, empty"), grabAt: 0.08)
         XCTAssertTrue(element(app, "5 of Spades, column 2").waitForExistence(timeout: 5), "five cards move")
@@ -387,6 +391,20 @@ final class FreeCellUITests: XCTestCase {
         ask?.buttons["Cancel"].press()
         XCTAssertTrue(app.descendants(matching: .any)["confirmation"].waitForNonExistence(timeout: 3))
         XCTAssertEqual(chip(app).label, "Game 2, Hard Core", "Cancel keeps it")
+    }
+
+    /// Relaxed (spec "Relaxed"): the Settings switch deals a Relaxed game at once on a fresh deal,
+    /// and the chip says so.
+    func testRelaxed() {
+        let app = launch(game: 1)
+        board(app)
+        more(app, "Settings")
+        let toggle = settingsSwitch(app, "Relaxed")
+        XCTAssertNotNil(toggle)
+        toggle?.press()
+        XCTAssertNil(confirmation(app, timeout: 1), "a fresh deal: no question")
+        XCTAssertTrue(chip(app).waitForExistence(timeout: 5))
+        XCTAssertEqual(chip(app).label, "Game 2, Relaxed")
     }
 
     /// Scores from More, before any win: an empty Top 10 says so, and Game Center is off.

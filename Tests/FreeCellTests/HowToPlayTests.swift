@@ -14,10 +14,10 @@ import Testing
     /// allow (the run limit included), playing cards home, ranking by time, Hard Core, Finish, saving.
     @Test func coversTheRules() {
         #expect(HowToPlay.sections.map(\.title) == ["Goal", "The deal", "Moves", "Playing cards home", "Your best",
-                                                    "Hard Core", "Controls", "Winning", "Saving"])
+                                                    "Hard Core", "Relaxed", "Controls", "Winning", "Saving"])
         for phrase in ["ace up to king", "eight columns", "free cells", "1 to 1,000,000", "Microsoft",
                        "opposite colour", "empty column", "(empty free cells + 1) × 2 for each empty column",
-                       "half that", "stay there", "aces and twos", "**time**", "fewer **moves**",
+                       "half that", "says how many cards can move", "Any stack in order moves at once", "**RX**", "stay there", "aces and twos", "**time**", "fewer **moves**",
                        "**Two free cells**", "**Finish**", "resumes at the next launch"] {
             #expect(text.contains(phrase), "missing: \(phrase)")
         }

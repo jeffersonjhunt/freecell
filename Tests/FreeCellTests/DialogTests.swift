@@ -56,6 +56,7 @@ import Testing
         #expect(NewGameRequest().kicker == "NEW GAME")
         #expect(NewGameRequest(number: 617).kicker == "NEW GAME")
         #expect(NewGameRequest(hardCore: true, changesHardCore: true).kicker == "HARD CORE")
+        #expect(NewGameRequest(relaxed: true, changesRelaxed: true).kicker == "RELAXED")
         #expect(NewGameRequest(number: 617, restarts: true).kicker == "RESTART")
     }
 }

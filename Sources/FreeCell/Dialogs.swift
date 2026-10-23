@@ -154,6 +154,7 @@ struct QuestionCard: View {
 struct WinCard: View {
     let number: Int
     var hardCore = false
+    var relaxed = false
     let moves: Int
     let elapsed: TimeInterval
     let undos: Int
@@ -171,7 +172,7 @@ struct WinCard: View {
     var body: some View {
         DialogCard(cornerRadius: wide ? 24 : 28, identifier: "winCard") {
             VStack(spacing: 6) {
-                DialogKicker(text: hardCore ? "GAME \(number) · HARD CORE" : "GAME \(number)")
+                DialogKicker(text: "GAME \(number)" + (hardCore ? " · HARD CORE" : "") + (relaxed ? " · RELAXED" : ""))
                 Text("You won!")
                     .font(.largeTitle.bold())
                     .foregroundStyle(DialogColors.title)
@@ -436,5 +437,26 @@ struct TileButtonStyle: ButtonStyle {
             .hoverEffect(.highlight)
             #endif
             .opacity(configuration.isPressed ? 0.75 : 1)
+    }
+}
+
+/// Why a run didn't move (spec "Interaction"): a dark capsule over the bottom of the board, like the
+/// dialogs, for a moment. VoiceOver hears it as an announcement.
+struct NoticeBanner: View {
+    let text: String
+
+    var body: some View {
+        Text(text)
+            .font(.subheadline.weight(.semibold))
+            .foregroundStyle(DialogColors.title)
+            .multilineTextAlignment(.center)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
+            .background(Capsule().fill(DialogColors.card))
+            .overlay(Capsule().strokeBorder(DialogColors.hairline))
+            .shadow(color: .black.opacity(0.4), radius: 12, y: 4)
+            .allowsHitTesting(false)
+            .accessibilityElement(children: .combine)
+            .accessibilityIdentifier("runLimitNotice")
     }
 }

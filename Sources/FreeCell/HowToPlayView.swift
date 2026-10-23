@@ -65,7 +65,7 @@ enum HowToPlay {
                 "**To a foundation:** an ace onto an empty foundation, then the same suit one rank higher.",
                 "**Between columns:** the last card of a column (or a free cell's card) onto a card one rank higher of the opposite colour — a red 7 onto a black 8. Any card can go into an empty column.",
                 "**To a free cell:** the last card of a column, into an empty cell.",
-                "**Runs:** a run in order at the end of a column moves together if your free spaces could carry it card by card: **(empty free cells + 1) × 2 for each empty column**. Into an empty column, half that.",
+                "**Runs:** a run in order at the end of a column moves together if your free spaces could carry it card by card: **(empty free cells + 1) × 2 for each empty column**. Into an empty column, half that. A run that's too long springs back, and the board says how many cards can move.",
                 "Cards on a foundation stay there.",
             ]),
             Section(title: "Playing cards home", lines: [
@@ -73,10 +73,13 @@ enum HowToPlay {
             ]),
             Section(title: "Your best", lines: [
                 "There are no points: wins rank by **time**, then by fewer **moves**. A run moved together is one move; cards the game plays home cost none.",
-                "Your **Top 10** keeps the ten fastest wins, and Game Center has a leaderboard for normal games and one for Hard Core.",
+                "Your **Top 10** keeps the ten fastest wins, and Game Center has leaderboards for standard, Hard Core and Relaxed games.",
             ]),
             Section(title: "Hard Core", lines: [
                 "**Two free cells** instead of four — fewer games can be won. Turn it on in **Settings**; changing it starts a new game.",
+            ]),
+            Section(title: "Relaxed", lines: [
+                "Any stack in order moves at once, however many free cells you have — an easier game. Turn it on in **Settings**; changing it starts a new game. Relaxed wins are marked **RX** and have their own Game Center leaderboards.",
             ]),
             Section(title: "Controls", lines: controls),
             Section(title: "Winning", lines: [

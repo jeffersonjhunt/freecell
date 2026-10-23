@@ -142,10 +142,28 @@ import FreeCellEngine
 }
 
 @Suite struct GameCenterBoards {
-    @Test func fastestTimeNormalAndHardCore() {
+    /// One board per mix of Hard Core and Relaxed, so an easier game never ranks against a harder one.
+    @Test func fastestTimeForEachMode() {
         #expect(GameCenter.Board.of(hardCore: false).rawValue == "com.oneoffendeavors.freecell.fastest")
         #expect(GameCenter.Board.of(hardCore: true).rawValue == "com.oneoffendeavors.freecell.fastest.hardcore")
-        #expect(GameCenter.Board.allCases.count == 2)
+        #expect(GameCenter.Board.of(hardCore: false, relaxed: true).rawValue == "com.oneoffendeavors.freecell.fastest.relaxed")
+        #expect(GameCenter.Board.of(hardCore: true, relaxed: true).rawValue == "com.oneoffendeavors.freecell.fastest.relaxed.hardcore")
+        #expect(Set(GameCenter.Board.allCases.map(\.rawValue)).count == 4)
+    }
+
+    /// A Relaxed win goes in the Top 10 marked RX; a Top 10 saved before Relaxed still loads.
+    @MainActor @Test func relaxedWinsAreMarkedAndOldListsStillLoad() throws {
+        let name = "scores-\(UUID().uuidString)"
+        let d = try #require(UserDefaults(suiteName: name))
+        defer { d.removePersistentDomain(forName: name) }
+        let book = ScoreBook(local: d, cloud: nil)
+        var s = FreeCellEngine.newGame(number: 3, relaxed: true)
+        s.foundations = Suit.allCases.map { suit in (1...13).map { Card(suit: suit, rank: $0) } }
+        s.tableau = Array(repeating: [], count: 8); s.isWon = true; s.elapsed = 70
+        #expect(book.record(s) == 1 && book.lists.entries.first?.relaxed == true)
+        let old = #"{"entries":[{"id":"5D6B2D84-6C4E-4F0B-9A55-1F1A3C0C5E21","elapsed":120,"moves":80,"number":617,"date":0,"hardCore":false}]}"#
+        let decoded = try JSONDecoder().decode(TopTen.self, from: Data(old.utf8))
+        #expect(decoded.entries.count == 1 && !decoded.entries[0].relaxed, "an entry from the first beta")
     }
 
     @MainActor @Test func switchedOffItDoesNothing() async {

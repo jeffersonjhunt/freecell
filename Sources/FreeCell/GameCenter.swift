@@ -11,17 +11,29 @@ import AppKit
 /// Scores. Signed out — or under tests — it does nothing.
 @Observable @MainActor
 final class GameCenter {
-    /// Fastest wins, normal and Hard Core (spec "Scores"): scored in seconds, lowest first.
+    /// Fastest wins (spec "Scores"): scored in seconds, lowest first — one board for each mix of
+    /// Hard Core and Relaxed, so an easier game never ranks against a harder one.
     enum Board: String, CaseIterable, Sendable {
         case fastest = "com.oneoffendeavors.freecell.fastest"
         case fastestHardCore = "com.oneoffendeavors.freecell.fastest.hardcore"
+        case fastestRelaxed = "com.oneoffendeavors.freecell.fastest.relaxed"
+        case fastestRelaxedHardCore = "com.oneoffendeavors.freecell.fastest.relaxed.hardcore"
 
-        static func of(hardCore: Bool) -> Board { hardCore ? .fastestHardCore : .fastest }
+        static func of(hardCore: Bool, relaxed: Bool = false) -> Board {
+            switch (relaxed, hardCore) {
+            case (false, false): .fastest
+            case (false, true): .fastestHardCore
+            case (true, false): .fastestRelaxed
+            case (true, true): .fastestRelaxedHardCore
+            }
+        }
 
         var title: String {
             switch self {
             case .fastest: "Fastest"
             case .fastestHardCore: "Fastest · Hard Core"
+            case .fastestRelaxed: "Fastest · Relaxed"
+            case .fastestRelaxedHardCore: "Fastest · Relaxed, Hard Core"
             }
         }
     }
@@ -49,9 +61,9 @@ final class GameCenter {
         }
     }
 
-    func submit(seconds: Int, hardCore: Bool) {
+    func submit(seconds: Int, hardCore: Bool, relaxed: Bool = false) {
         guard isEnabled, GKLocalPlayer.local.isAuthenticated else { return }
-        let board = Board.of(hardCore: hardCore).rawValue
+        let board = Board.of(hardCore: hardCore, relaxed: relaxed).rawValue
         Task {
             try? await GKLeaderboard.submitScore(seconds, context: 0, player: GKLocalPlayer.local,
                                                  leaderboardIDs: [board])

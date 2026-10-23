@@ -137,6 +137,8 @@ private func tempSaveURL() -> URL {
         #expect(LaunchPlan.decide(saved: nil, resumePreferred: true, hardCore: true) == .deal(hardCore: true),
                 "a fresh launch deals Hard Core if the last deal was")
         #expect(GameStore.launch(.deal(hardCore: true), saver: nil).state.isHardCore)
+        #expect(LaunchPlan.decide(saved: nil, resumePreferred: true, relaxed: true) == .deal(hardCore: false, relaxed: true))
+        #expect(GameStore.launch(.deal(hardCore: false, relaxed: true), saver: nil).state.isRelaxed)
     }
 
     /// A fresh deal at launch is saved at once, so an older game left on disk cannot come back.

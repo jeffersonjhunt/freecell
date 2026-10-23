@@ -10,9 +10,29 @@ struct ScoreEntry: Codable, Hashable, Identifiable, Sendable {
     var number: Int
     var date: Date
     var hardCore: Bool
+    /// A Relaxed win (spec "Relaxed"), marked RX.
+    var relaxed = false
+
+    init(id: UUID, elapsed: TimeInterval, moves: Int, number: Int, date: Date, hardCore: Bool, relaxed: Bool = false) {
+        (self.id, self.elapsed, self.moves, self.number, self.date, self.hardCore, self.relaxed)
+            = (id, elapsed, moves, number, date, hardCore, relaxed)
+    }
+
+    /// Entries saved before Relaxed (the first beta) are standard wins — a Top 10 must never be
+    /// lost to a new field.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(UUID.self, forKey: .id)
+        elapsed = try c.decode(TimeInterval.self, forKey: .elapsed)
+        moves = try c.decode(Int.self, forKey: .moves)
+        number = try c.decode(Int.self, forKey: .number)
+        date = try c.decode(Date.self, forKey: .date)
+        hardCore = try c.decode(Bool.self, forKey: .hardCore)
+        relaxed = try c.decodeIfPresent(Bool.self, forKey: .relaxed) ?? false
+    }
 }
 
-/// The Top 10: the ten fastest wins, normal and Hard Core together — the faster first; on equal
+/// The Top 10: the ten fastest wins, every mode together (Hard Core marked HC, Relaxed RX) — the faster first; on equal
 /// times, fewer moves; then the earlier win (decision 2026-10-20).
 struct TopTen: Codable, Equatable, Sendable {
     static let size = 10
@@ -107,7 +127,7 @@ final class ScoreBook {
     func record(_ state: GameState, date: Date = .now) -> Int? {
         guard state.isWon, !state.isRestarted else { return nil }
         let entry = ScoreEntry(id: UUID(), elapsed: state.elapsed, moves: state.moveCount, number: state.number,
-                               date: date, hardCore: state.isHardCore)
+                               date: date, hardCore: state.isHardCore, relaxed: state.isRelaxed)
         let rank = lists.add(entry)
         wins.byDevice[device, default: 0] += 1
         latest = Latest(id: entry.id, number: state.number, rank: rank)

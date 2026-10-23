@@ -18,7 +18,7 @@ struct FreeCellApp: App {
         // Every win goes into the Top 10 and the wins, and its time to Game Center (spec "Scores").
         store.onWin = { state in
             scores.record(state)
-            gameCenter.submit(seconds: Int(state.elapsed), hardCore: state.isHardCore)
+            gameCenter.submit(seconds: Int(state.elapsed), hardCore: state.isHardCore, relaxed: state.isRelaxed)
         }
         _store = State(initialValue: store)
         _scores = State(initialValue: scores)
@@ -96,6 +96,7 @@ struct FreeCellApp: App {
         #endif
         store.playsCardsHome = { AppSettings.playsCardsHome }
         store.rememberHardCore = { AppSettings.defaults.set($0, forKey: AppSettings.hardCoreKey) }
+        store.rememberRelaxed = { AppSettings.defaults.set($0, forKey: AppSettings.relaxedKey) }
         saveBeforeTheProcessMayEnd(store)
         return store
     }
@@ -104,8 +105,9 @@ struct FreeCellApp: App {
         let defaults = AppSettings.defaults
         let resume = defaults.object(forKey: AppSettings.resumeKey) as? Bool ?? true
         let hardCore = defaults.object(forKey: AppSettings.hardCoreKey) as? Bool ?? false
+        let relaxed = defaults.object(forKey: AppSettings.relaxedKey) as? Bool ?? false
         let plan = LaunchPlan.decide(saved: url.flatMap(GameSaver.load(from:)), resumePreferred: resume,
-                                     hardCore: hardCore)
+                                     hardCore: hardCore, relaxed: relaxed)
         return GameStore.launch(plan, saver: saver)
     }
 
@@ -130,6 +132,8 @@ struct FreeCellApp: App {
 enum AppSettings {
     /// Whether the last deal was Hard Core (spec "Hard Core"); the next fresh deal follows it.
     static let hardCoreKey = "hardCore"
+    /// Whether the last deal was Relaxed (spec "Relaxed"); the next fresh deal follows it.
+    static let relaxedKey = "relaxed"
     static let resumeKey = "resumeOnLaunch"
     /// The card face and back (spec "Card styles"); an unknown stored value reads as the default.
     static let cardFaceKey = "cardFace"

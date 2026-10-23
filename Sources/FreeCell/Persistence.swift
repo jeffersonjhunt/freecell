@@ -80,11 +80,12 @@ enum SaveValidation {
 /// deal a fresh one in the remembered mode.
 enum LaunchPlan: Equatable {
     case resume(GameState)
-    case deal(hardCore: Bool)
+    case deal(hardCore: Bool, relaxed: Bool = false)
 
-    static func decide(saved: GameState?, resumePreferred: Bool, hardCore: Bool = false) -> LaunchPlan {
+    static func decide(saved: GameState?, resumePreferred: Bool, hardCore: Bool = false,
+                       relaxed: Bool = false) -> LaunchPlan {
         if resumePreferred, let saved { return .resume(saved) }
-        return .deal(hardCore: hardCore)
+        return .deal(hardCore: hardCore, relaxed: relaxed)
     }
 }
 

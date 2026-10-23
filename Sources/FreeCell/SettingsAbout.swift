@@ -58,6 +58,21 @@ struct SettingsView: View {
                 .accessibilityLabel("Hard Core")
                 .accessibilityHint("Two free cells instead of four. Changing it starts a new game")
                 .tint(TableColors.accent)
+                // Shows the current game's mode; changing it deals a new game (spec "Relaxed").
+                Toggle(isOn: Binding(get: { store.state.isRelaxed }, set: { on in
+                    closeSettings()
+                    ui.requestNewGame(relaxed: on, store: store)
+                })) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Relaxed")
+                        Text("Any stack in order moves at once, however many free cells you have. Changing it starts a new game.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .accessibilityLabel("Relaxed")
+                .accessibilityHint("Any stack in order moves at once. Changing it starts a new game")
+                .tint(TableColors.accent)
                 Toggle("Play cards home automatically", isOn: $playCardsHome)
                     .accessibilityLabel("Play cards home automatically")
                     .accessibilityHint("Sends a card to its foundation once no other card could need it")

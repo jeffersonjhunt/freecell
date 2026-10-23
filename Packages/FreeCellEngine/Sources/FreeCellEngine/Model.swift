@@ -49,6 +49,8 @@ public struct GameState: Codable, Sendable, Equatable {
     public var number: Int
     /// Hard Core: two free cells instead of four (spec "Hard Core").
     public var isHardCore: Bool
+    /// Relaxed: any ordered run moves at once, whatever the free spaces (spec "Relaxed").
+    public var isRelaxed: Bool
     public var moveCount: Int
     public var elapsed: TimeInterval
     public var isWon: Bool
@@ -58,18 +60,35 @@ public struct GameState: Codable, Sendable, Equatable {
     public var isRestarted: Bool
 
     public init(cells: [Card?], foundations: [[Card]], tableau: [[Card]], number: Int,
-                isHardCore: Bool = false, moveCount: Int = 0, elapsed: TimeInterval = 0,
-                isWon: Bool = false, undos: Int = 0, isRestarted: Bool = false) {
+                isHardCore: Bool = false, isRelaxed: Bool = false, moveCount: Int = 0,
+                elapsed: TimeInterval = 0, isWon: Bool = false, undos: Int = 0, isRestarted: Bool = false) {
         self.cells = cells
         self.foundations = foundations
         self.tableau = tableau
         self.number = number
         self.isHardCore = isHardCore
+        self.isRelaxed = isRelaxed
         self.moveCount = moveCount
         self.elapsed = elapsed
         self.isWon = isWon
         self.undos = undos
         self.isRestarted = isRestarted
+    }
+
+    /// Decodes a saved game. Saves from before Relaxed (the first TestFlight build) are standard games.
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        cells = try c.decode([Card?].self, forKey: .cells)
+        foundations = try c.decode([[Card]].self, forKey: .foundations)
+        tableau = try c.decode([[Card]].self, forKey: .tableau)
+        number = try c.decode(Int.self, forKey: .number)
+        isHardCore = try c.decode(Bool.self, forKey: .isHardCore)
+        isRelaxed = try c.decodeIfPresent(Bool.self, forKey: .isRelaxed) ?? false
+        moveCount = try c.decode(Int.self, forKey: .moveCount)
+        elapsed = try c.decode(TimeInterval.self, forKey: .elapsed)
+        isWon = try c.decode(Bool.self, forKey: .isWon)
+        undos = try c.decode(Int.self, forKey: .undos)
+        isRestarted = try c.decode(Bool.self, forKey: .isRestarted)
     }
 
     /// Free cells with no card in them.

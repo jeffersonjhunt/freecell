@@ -308,3 +308,63 @@ import Testing
         #expect(back == s)
     }
 }
+
+// MARK: - Why a run won't move, and Relaxed (spec "Interaction", "Relaxed")
+
+@Suite struct RunLimitAndRelaxed {
+    /// Game #157916 as a tester sent it from TestFlight ("rules or bug"): one free cell empty, no
+    /// empty column — so two cards at once, and the J♠ and 8♠ runs won't move.
+    static var tester: GameState {
+        board(columns: [cards("JS TD 9S 8H 7S 6H"), cards("4D 8D 9C 7C 3D KS QH JC TH"), cards("8S 7H 6C 5H 4C"),
+                        cards("6D"), cards("2C 5S QS 6S 4S 5C 4H 3C"), cards("KC QD"), cards("KD QC JH TS 9H"),
+                        cards("3H 8C JD TC 9D")],
+              cells: [c("5D"), nil, c("7D"), c("KH")],
+              foundations: [cards("AC"), cards("AH 2H"), cards("AD 2D"), cards("AS 2S 3S")], number: 157916)
+    }
+
+    @Test func theTestersPositionIsAWholeDeck() {
+        #expect(Set(allCards(Self.tester)).count == 52 && allCards(Self.tester).count == 52)
+    }
+
+    @Test func theRefusalSaysWhy() {
+        let s = Self.tester
+        let jack = Move(source: .tableau(0), index: 0, destination: .tableau(5))
+        let eight = Move(source: .tableau(2), index: 0, destination: .tableau(6))
+        #expect(!E.canMove(jack, in: s) && !E.canMove(eight, in: s))
+        #expect(E.runLimitRefusal(jack, in: s) == .init(cards: 6, limit: 2, emptyCells: 1, emptyColumns: 0, intoEmptyColumn: false))
+        #expect(E.runLimitRefusal(eight, in: s) == .init(cards: 5, limit: 2, emptyCells: 1, emptyColumns: 0, intoEmptyColumn: false))
+        #expect(E.runLimitRefusal(for: .tableau(0), index: 0, in: s)?.cards == 6, "a tap gets the same answer")
+    }
+
+    /// Only the run limit is explained: a legal move, a wrong colour or an out-of-order run is not.
+    @Test func nothingElseIsCalledARunLimit() {
+        let s = Self.tester
+        #expect(E.runLimitRefusal(Move(source: .tableau(0), index: 5, destination: .cell(1)), in: s) == nil, "legal")
+        #expect(E.runLimitRefusal(Move(source: .tableau(0), index: 0, destination: .tableau(7)), in: s) == nil, "J♠ on 9♦")
+        #expect(E.runLimitRefusal(Move(source: .tableau(1), index: 0, destination: .tableau(5)), in: s) == nil, "out of order")
+        #expect(E.runLimitRefusal(Move(source: .tableau(0), index: 4, destination: .tableau(4)), in: s) == nil, "two cards fit")
+    }
+
+    @Test func relaxedMovesAnyOrderedRun() {
+        var s = Self.tester
+        s.isRelaxed = true
+        #expect(E.maxRun(onto: .tableau(5), in: s) == 52)
+        #expect(E.canMove(Move(source: .tableau(0), index: 0, destination: .tableau(5)), in: s), "the J♠ run onto the Q♦")
+        #expect(E.canMove(Move(source: .tableau(2), index: 0, destination: .tableau(6)), in: s), "the 8♠ run onto the 9♥")
+        #expect(E.runLimitRefusal(Move(source: .tableau(0), index: 0, destination: .tableau(5)), in: s) == nil)
+        #expect(!E.canMove(Move(source: .tableau(0), index: 0, destination: .tableau(7)), in: s), "the rules still hold")
+        #expect(!E.canPickUp(from: .tableau(1), index: 0, in: s), "an out-of-order run still won't lift")
+    }
+
+    @Test func relaxedIsPartOfTheGame() throws {
+        let s = E.newGame(number: 617, hardCore: true, relaxed: true)
+        #expect(s.isRelaxed && s.isHardCore && E.restart(s).isRelaxed)
+        #expect(!E.newGame(number: 617).isRelaxed)
+        let data = try JSONEncoder().encode(s)
+        #expect(try JSONDecoder().decode(GameState.self, from: data) == s)
+        var object = try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+        object.removeValue(forKey: "isRelaxed")
+        let older = try JSONDecoder().decode(GameState.self, from: JSONSerialization.data(withJSONObject: object))
+        #expect(!older.isRelaxed, "a save from the first beta is a standard game")
+    }
+}

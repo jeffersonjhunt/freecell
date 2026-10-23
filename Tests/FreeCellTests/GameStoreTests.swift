@@ -245,3 +245,66 @@ func cardsHome(_ s: GameState) -> Int { s.foundations.reduce(0) { $0 + $1.count 
         #expect(store.state.elapsed == 3)
     }
 }
+
+/// Spec "Interaction": a refused run says why; Relaxed lets it move.
+@MainActor @Suite struct RunLimitNotice {
+    /// Game #157916 as a tester sent it: one free cell, no empty column.
+    static var tester: GameState {
+        var s = position(columns: [cards("JS TD 9S 8H 7S 6H"), cards("4D 8D 9C 7C 3D KS QH JC TH"),
+                                   cards("8S 7H 6C 5H 4C"), cards("6D"), cards("2C 5S QS 6S 4S 5C 4H 3C"),
+                                   cards("KC QD"), cards("KD QC JH TS 9H"), cards("3H 8C JD TC 9D")],
+                         cells: [card("5D"), nil, card("7D"), card("KH")],
+                         foundations: [cards("AC"), cards("AH 2H"), cards("AD 2D"), cards("AS 2S 3S")])
+        s.number = 157916
+        return s
+    }
+
+    @Test func aRefusedDragSaysWhy() {
+        let store = makeStore(at: Self.tester)
+        #expect(store.notice == nil)
+        #expect(!store.drop(source: .tableau(0), index: 0, on: .tableau(5)))
+        #expect(store.notice?.text == "Only 2 cards can move — 1 free cell, no empty column")
+        let first = store.notice
+        #expect(!store.drop(source: .tableau(2), index: 0, on: .tableau(6)))
+        #expect(store.notice != first, "the same refusal shows again")
+    }
+
+    @Test func aRefusedTapSaysWhyToo() {
+        let store = makeStore(at: Self.tester)
+        #expect(!store.tap(pile: .tableau(0), index: 0))
+        #expect(store.notice?.text == "Only 2 cards can move — 1 free cell, no empty column")
+    }
+
+    /// Any other refusal is silent: the wiggle is the answer.
+    @Test func otherRefusalsSayNothing() {
+        let store = makeStore(at: Self.tester)
+        #expect(!store.drop(source: .tableau(0), index: 0, on: .tableau(7)))     // J♠ onto 9♦
+        #expect(!store.tap(pile: .tableau(1), index: 0))                        // an out-of-order column
+        #expect(store.notice == nil)
+    }
+
+    @Test func relaxedMovesTheTestersRuns() {
+        var s = Self.tester
+        s.isRelaxed = true
+        let store = makeStore(at: s)
+        #expect(store.drop(source: .tableau(0), index: 0, on: .tableau(5)), "the J♠ run onto the Q♦")
+        #expect(store.drop(source: .tableau(2), index: 0, on: .tableau(6)), "the 8♠ run onto the 9♥")
+        #expect(store.notice == nil && store.state.moveCount == 2)
+    }
+
+    @Test(arguments: [
+        (FreeCellEngine.RunLimitRefusal(cards: 6, limit: 2, emptyCells: 1, emptyColumns: 0, intoEmptyColumn: false),
+         "Only 2 cards can move — 1 free cell, no empty column"),
+        (.init(cards: 2, limit: 1, emptyCells: 0, emptyColumns: 0, intoEmptyColumn: false),
+         "Only 1 card can move — no free cell, no empty column"),
+        (.init(cards: 13, limit: 5, emptyCells: 4, emptyColumns: 0, intoEmptyColumn: true),
+         "Only 5 cards can move into an empty column — 4 free cells, no other empty column"),
+        (.init(cards: 13, limit: 12, emptyCells: 2, emptyColumns: 2, intoEmptyColumn: false),
+         "Only 12 cards can move — 2 free cells, 2 empty columns"),
+        (.init(cards: 9, limit: 8, emptyCells: 3, emptyColumns: 1, intoEmptyColumn: true),
+         "Only 8 cards can move into an empty column — 3 free cells, 1 other empty column"),
+    ])
+    func theNoticeCountsTheFreeSpaces(_ refusal: FreeCellEngine.RunLimitRefusal, _ text: String) {
+        #expect(GameStore.noticeText(refusal) == text)
+    }
+}

@@ -100,6 +100,12 @@ struct ScoresView: View {
                 .padding(.horizontal, 6).padding(.vertical, 2)
                 .background(RoundedRectangle(cornerRadius: 6).fill(TableColors.accent))
                 .opacity(entry.hardCore ? 1 : 0)
+            Text("RX")
+                .font(AppFont.mono(11, bold: true, relativeTo: .caption2))
+                .foregroundStyle(DialogColors.title)
+                .padding(.horizontal, 6).padding(.vertical, 2)
+                .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(DialogColors.outline))
+                .opacity(entry.relaxed ? 1 : 0)
             Spacer(minLength: 4)
             Text(verbatim: "\(entry.moves) · #\(entry.number)")
                 .font(AppFont.mono(13, relativeTo: .footnote))
@@ -114,7 +120,7 @@ struct ScoresView: View {
         .background(latest ? TableColors.accent.opacity(0.16) : .clear)
         .overlay(alignment: .bottom) { if !last { DialogColors.hairline.frame(height: 0.5) } }
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("\(rank). \(GameHeader.spokenClock(entry.elapsed))\(entry.hardCore ? ", Hard Core" : ""), "
+        .accessibilityLabel("\(rank). \(GameHeader.spokenClock(entry.elapsed))\(entry.hardCore ? ", Hard Core" : "")\(entry.relaxed ? ", Relaxed" : ""), "
                             + "\(entry.moves) moves, game \(entry.number), \(Self.day(entry.date))")
     }
 
@@ -139,7 +145,7 @@ struct ScoresView: View {
                 }
                 .buttonStyle(.plain)
                 .disabled(!gameCenter.isSignedIn)
-                .overlay(alignment: .bottom) { if board == pair[0] { DialogColors.hairline.frame(height: 0.5) } }
+                .overlay(alignment: .bottom) { if board != pair.last { DialogColors.hairline.frame(height: 0.5) } }
             }
         }
         .background(RoundedRectangle(cornerRadius: 14).fill(Color(hex: 0x1E1E1E)))

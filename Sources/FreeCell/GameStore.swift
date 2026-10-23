@@ -35,6 +35,19 @@ final class GameStore {
         didSet { if lastHardCore != oldValue { rememberHardCore?(lastHardCore) } }
     }
     @ObservationIgnored var rememberHardCore: ((Bool) -> Void)?
+    /// Whether the last deal (or the game resumed) is Relaxed: what New Game deals next.
+    private(set) var lastRelaxed: Bool {
+        didSet { if lastRelaxed != oldValue { rememberRelaxed?(lastRelaxed) } }
+    }
+    @ObservationIgnored var rememberRelaxed: ((Bool) -> Void)?
+    /// Why the last drag or tap didn't move (spec "Interaction"): a run longer than the free spaces
+    /// allow. The board shows it for a moment; nil otherwise.
+    private(set) var notice: Notice?
+
+    struct Notice: Equatable {
+        let text: String
+        let sequence: Int                 // a repeat of the same refusal still shows again
+    }
     /// Settings ▸ Play cards home automatically (spec "Game rules"); tests set it directly.
     @ObservationIgnored var playsCardsHome: () -> Bool = { true }
     /// Whether automatic plays and Finish step 90 ms apart (the board turns this off under Reduce
@@ -76,10 +89,11 @@ final class GameStore {
     @ObservationIgnored private var steppingIsFinish = false
 
     /// - Parameter makeNumber: where New Game's numbers come from; tests inject a fixed sequence.
-    init(hardCore: Bool = false, makeNumber: @escaping () -> Int = GameStore.randomNumber) {
+    init(hardCore: Bool = false, relaxed: Bool = false, makeNumber: @escaping () -> Int = GameStore.randomNumber) {
         self.makeNumber = makeNumber
         lastHardCore = hardCore
-        state = FreeCellEngine.newGame(number: makeNumber(), hardCore: hardCore)
+        lastRelaxed = relaxed
+        state = FreeCellEngine.newGame(number: makeNumber(), hardCore: hardCore, relaxed: relaxed)
     }
 
     nonisolated static func randomNumber() -> Int {
@@ -98,19 +112,21 @@ final class GameStore {
 
     // MARK: Intents
 
-    /// Deals a random game number (never one of the eight unwinnable). `hardCore`: nil keeps the
-    /// last deal's mode.
-    func newGame(hardCore: Bool? = nil) {
-        newGame(number: makeNumber(), hardCore: hardCore)
+    /// Deals a random game number (never one of the eight unwinnable). `hardCore`, `relaxed`: nil
+    /// keeps the last deal's mode.
+    func newGame(hardCore: Bool? = nil, relaxed: Bool? = nil) {
+        newGame(number: makeNumber(), hardCore: hardCore, relaxed: relaxed)
     }
 
-    /// Deals game `number` (clamped into range). `hardCore`: nil keeps the last deal's mode.
-    func newGame(number: Int, hardCore: Bool? = nil) {
+    /// Deals game `number` (clamped into range). `hardCore`, `relaxed`: nil keeps the last deal's mode.
+    func newGame(number: Int, hardCore: Bool? = nil, relaxed: Bool? = nil) {
         stopStepping()
         pendingDrag = nil
+        notice = nil
         lastHardCore = hardCore ?? lastHardCore
+        lastRelaxed = relaxed ?? lastRelaxed
         let n = min(max(number, FreeCellEngine.numbers.lowerBound), FreeCellEngine.numbers.upperBound)
-        state = FreeCellEngine.newGame(number: n, hardCore: lastHardCore)
+        state = FreeCellEngine.newGame(number: n, hardCore: lastHardCore, relaxed: lastRelaxed)
         dealID = UUID()
         undoStack.removeAll()
         updateClock()
@@ -131,6 +147,7 @@ final class GameStore {
     func resume(from saved: GameState) {
         stopStepping()
         lastHardCore = saved.isHardCore
+        lastRelaxed = saved.isRelaxed
         state = saved
         dealID = UUID()
         undoStack.removeAll()
@@ -143,6 +160,7 @@ final class GameStore {
     func tap(pile: PileID, index: Int) -> Bool {
         settleNow()
         guard let destination = FreeCellEngine.autoDestination(for: pile, index: index, in: state) else {
+            explain(FreeCellEngine.runLimitRefusal(for: pile, index: index, in: state))
             return false
         }
         perform(Move(source: pile, index: index, destination: destination))
@@ -169,7 +187,10 @@ final class GameStore {
         pendingDrag = nil
         settleNow()
         let move = Move(source: source, index: index, destination: destination)
-        guard FreeCellEngine.canMove(move, in: state) else { return false }
+        guard FreeCellEngine.canMove(move, in: state) else {
+            explain(FreeCellEngine.runLimitRefusal(move, in: state))
+            return false
+        }
         perform(move)
         return true
     }
@@ -293,6 +314,23 @@ final class GameStore {
         updateClock()
     }
 
+    /// Shows why a run didn't move, when the run limit is why.
+    private func explain(_ refusal: FreeCellEngine.RunLimitRefusal?) {
+        guard let refusal else { return }
+        notice = Notice(text: Self.noticeText(refusal), sequence: (notice?.sequence ?? 0) + 1)
+    }
+
+    /// "Only 2 cards can move — 1 free cell, no empty column" (spec "Interaction").
+    nonisolated static func noticeText(_ r: FreeCellEngine.RunLimitRefusal) -> String {
+        let cards = r.limit == 1 ? "Only 1 card can move" : "Only \(r.limit) cards can move"
+        let place = r.intoEmptyColumn ? " into an empty column" : ""
+        let cells = r.emptyCells == 0 ? "no free cell" : r.emptyCells == 1 ? "1 free cell" : "\(r.emptyCells) free cells"
+        let other = r.intoEmptyColumn ? "other " : ""
+        let columns = r.emptyColumns == 0 ? "no \(other)empty column"
+            : r.emptyColumns == 1 ? "1 \(other)empty column" : "\(r.emptyColumns) \(other)empty columns"
+        return "\(cards)\(place) — \(cells), \(columns)"
+    }
+
     private func announce(_ kind: FeedbackEvent.Kind) {
         feedback = FeedbackEvent(kind: kind, sequence: (feedback?.sequence ?? 0) + 1)
     }
@@ -350,11 +388,11 @@ final class GameStore {
         let store: GameStore
         switch plan {
         case .resume(let saved):
-            store = GameStore(hardCore: saved.isHardCore)
+            store = GameStore(hardCore: saved.isHardCore, relaxed: saved.isRelaxed)
             store.resume(from: saved)
             store.saver = saver
-        case .deal(let hardCore):
-            store = GameStore(hardCore: hardCore)
+        case .deal(let hardCore, let relaxed):
+            store = GameStore(hardCore: hardCore, relaxed: relaxed)
             store.saver = saver
             store.saveNow()
         }

@@ -162,7 +162,13 @@ struct BoardView: View {
                     }
                 } else {
                     withAnimation(reduceMotion ? nil : Self.springBack) {
-                        store.cancelDrag()
+                        // Refused: the store ends the drag and, when the run limit is why, says so
+                        // (spec "Interaction") — the same path a tap takes.
+                        if let target {
+                            store.drop(source: drag.source, index: drag.index, on: target)
+                        } else {
+                            store.cancelDrag()
+                        }
                         dragTranslation = .zero
                     }
                 }

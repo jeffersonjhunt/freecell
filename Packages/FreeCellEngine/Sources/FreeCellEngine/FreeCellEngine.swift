@@ -35,17 +35,18 @@ public enum FreeCellEngine {
         return columns
     }
 
-    public static func newGame(number: Int, hardCore: Bool = false) -> GameState {
+    /// `relaxed`: any ordered run moves at once (spec "Relaxed").
+    public static func newGame(number: Int, hardCore: Bool = false, relaxed: Bool = false) -> GameState {
         precondition(numbers.contains(number), "game numbers run from 1 to 1,000,000")
         return GameState(cells: Array(repeating: nil, count: cellCount(hardCore: hardCore)),
                          foundations: Array(repeating: [], count: 4), tableau: deal(number: number),
-                         number: number, isHardCore: hardCore)
+                         number: number, isHardCore: hardCore, isRelaxed: relaxed)
     }
 
-    /// This game again from the start (spec "Restart"): the same number and Hard Core, with moves,
-    /// time and undos back to none — marked restarted, so its win is never recorded.
+    /// This game again from the start (spec "Restart"): the same number, Hard Core and Relaxed, with
+    /// moves, time and undos back to none — marked restarted, so its win is never recorded.
     public static func restart(_ state: GameState) -> GameState {
-        var fresh = newGame(number: state.number, hardCore: state.isHardCore)
+        var fresh = newGame(number: state.number, hardCore: state.isHardCore, relaxed: state.isRelaxed)
         fresh.isRestarted = true
         return fresh
     }
@@ -102,8 +103,9 @@ public enum FreeCellEngine {
 
     /// The longest run that may move onto `destination` at once: the cards the free spaces could
     /// carry one by one — (empty free cells + 1) × 2^(empty columns), the empty columns counted
-    /// without the destination.
+    /// without the destination. A Relaxed game has no limit.
     public static func maxRun(onto destination: PileID, in state: GameState) -> Int {
+        if state.isRelaxed { return 52 }
         var emptyColumns = state.emptyColumns
         if case .tableau(let t) = destination, state.tableau.indices.contains(t), state.tableau[t].isEmpty {
             emptyColumns -= 1
@@ -116,6 +118,53 @@ public enum FreeCellEngine {
     /// (A run too long for the free spaces may be lifted; the drop is refused.)
     public static func canPickUp(from source: PileID, index: Int, in state: GameState) -> Bool {
         !state.isWon && movableRun(from: source, index: index, in: state) != nil
+    }
+
+    // MARK: Why a run won't move
+
+    /// A move refused only because the run is longer than the free spaces allow — what the board
+    /// tells the player (spec "Interaction"): the run's length, the limit, and the free spaces
+    /// counted.
+    public struct RunLimitRefusal: Equatable, Sendable {
+        public let cards: Int
+        public let limit: Int
+        public let emptyCells: Int
+        /// Empty columns counted toward the limit (the destination is never one of them).
+        public let emptyColumns: Int
+        public let intoEmptyColumn: Bool
+
+        public init(cards: Int, limit: Int, emptyCells: Int, emptyColumns: Int, intoEmptyColumn: Bool) {
+            (self.cards, self.limit, self.emptyCells, self.emptyColumns, self.intoEmptyColumn)
+                = (cards, limit, emptyCells, emptyColumns, intoEmptyColumn)
+        }
+    }
+
+    /// Why `move` is refused, when the only reason is the run limit; nil for a legal move or one
+    /// refused for any other reason.
+    public static func runLimitRefusal(_ move: Move, in state: GameState) -> RunLimitRefusal? {
+        guard !state.isWon, move.source != move.destination, case .tableau(let t) = move.destination,
+              (0..<8).contains(t), let run = movableRun(from: move.source, index: move.index, in: state),
+              let first = run.first else { return nil }
+        if let top = state.tableau[t].last {
+            guard first.rank == top.rank - 1, first.suit.isRed != top.suit.isRed else { return nil }
+        }
+        let limit = maxRun(onto: move.destination, in: state)
+        guard run.count > limit else { return nil }
+        let empty = state.tableau[t].isEmpty
+        return RunLimitRefusal(cards: run.count, limit: limit, emptyCells: state.emptyCells,
+                               emptyColumns: state.emptyColumns - (empty ? 1 : 0), intoEmptyColumn: empty)
+    }
+
+    /// For a tap with nowhere to go: the run-limit refusal for the first column that would otherwise
+    /// take the run (a column with a card first, then an empty one), if that is why.
+    public static func runLimitRefusal(for source: PileID, index: Int, in state: GameState) -> RunLimitRefusal? {
+        let columns = (0..<8).filter { !state.tableau[$0].isEmpty } + (0..<8).filter { state.tableau[$0].isEmpty }
+        for t in columns {
+            if let refusal = runLimitRefusal(Move(source: source, index: index, destination: .tableau(t)), in: state) {
+                return refusal
+            }
+        }
+        return nil
     }
 
     // MARK: Tap-to-move

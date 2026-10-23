@@ -68,7 +68,7 @@ struct GameHeader: View {
     /// "#24301" (· HC): a button that opens Choose a game. The capsule is 28 pt tall; its tap target
     /// reaches 8 pt beyond it above and below (44 pt) without making the header any taller.
     private var gameChip: some View {
-        let chip = Self.gameChip(number: store.state.number, hardCore: store.state.isHardCore)
+        let chip = Self.gameChip(number: store.state.number, hardCore: store.state.isHardCore, relaxed: store.state.isRelaxed)
         return Button { ui.choosingGame = true } label: {
             HStack(spacing: 6) {
                 Text(chip.text)
@@ -104,10 +104,11 @@ struct GameHeader: View {
         }
     }
 
-    /// The chip for this game: its number, and Hard Core (spec "Hard Core").
-    nonisolated static func gameChip(number: Int, hardCore: Bool = false) -> (text: String, spoken: String) {
-        (hardCore ? "#\(number) · HC" : "#\(number)",
-         hardCore ? "Game \(number), Hard Core" : "Game \(number)")
+    /// The chip for this game: its number, then HC (Hard Core) and RX (Relaxed).
+    nonisolated static func gameChip(number: Int, hardCore: Bool = false, relaxed: Bool = false) -> (text: String, spoken: String) {
+        let marks = (hardCore ? " · HC" : "") + (relaxed ? " · RX" : "")
+        let words = (hardCore ? ", Hard Core" : "") + (relaxed ? ", Relaxed" : "")
+        return ("#\(number)\(marks)", "Game \(number)\(words)")
     }
 
     static func clock(_ elapsed: TimeInterval) -> String {

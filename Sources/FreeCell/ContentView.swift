@@ -14,6 +14,8 @@ struct ContentView: View {
     @State private var dismissedWinDeal: UUID?
     /// The deal whose win animation has finished; the win card waits for it, so it plays uncovered.
     @State private var animationFinishedDeal: UUID?
+    /// Why the last run didn't move, shown for a moment over the bottom of the board.
+    @State private var shownNotice: GameStore.Notice?
     /// The width the eight columns actually use, so the header lines up with the cards.
     @State private var boardWidth: CGFloat?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -37,6 +39,25 @@ struct ContentView: View {
         VStack(spacing: 0) {
             if !shortScreen { GameHeader(store: store, ui: ui, width: boardWidth) }
             BoardView(store: store) { animationFinishedDeal = store.dealID }   // draws the win animation itself
+                .overlay(alignment: .bottom) {
+                    if let notice = shownNotice {
+                        NoticeBanner(text: notice.text)
+                            .padding(.bottom, 14)
+                            .padding(.horizontal, 16)
+                            .transition(.opacity)
+                    }
+                }
+                .onChange(of: store.notice) { _, notice in
+                    guard let notice else { return }
+                    withAnimation(reduceMotion ? nil : .easeOut(duration: 0.15)) { shownNotice = notice }
+                    AccessibilityNotification.Announcement(notice.text).post()
+                    Task {
+                        try? await Task.sleep(for: .seconds(2.5))
+                        if shownNotice == notice {
+                            withAnimation(reduceMotion ? nil : .easeOut(duration: 0.3)) { shownNotice = nil }
+                        }
+                    }
+                }
                 .onGeometryChange(for: CGFloat.self) { [isTouch = BoardView.isTouch] proxy in
                     BoardMetrics(size: proxy.size, isTouch: isTouch).usedWidth
                 } action: { boardWidth = $0 }
@@ -118,7 +139,7 @@ struct ContentView: View {
                 .transition(.opacity)
             } else if winSheetShown.wrappedValue {
                 DialogScrim(bottom: !wideDialogs, maxWidth: 480) {
-                    WinCard(number: store.state.number, hardCore: store.state.isHardCore,
+                    WinCard(number: store.state.number, hardCore: store.state.isHardCore, relaxed: store.state.isRelaxed,
                             moves: store.state.moveCount, elapsed: store.state.elapsed,
                             undos: store.state.undos, freeCells: store.state.cells.count,
                             wins: scores.wins.total, topTenRank: scores.rank(ofWin: store.state),

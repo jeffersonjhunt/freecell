@@ -99,6 +99,8 @@ func worstCaseState() -> GameState {
     @Test func theGameChipShowsTheNumber() {
         #expect(GameHeader.gameChip(number: 24301) == ("#24301", "Game 24301"))
         #expect(GameHeader.gameChip(number: 24301, hardCore: true) == ("#24301 · HC", "Game 24301, Hard Core"))
+        #expect(GameHeader.gameChip(number: 24301, relaxed: true) == ("#24301 · RX", "Game 24301, Relaxed"))
+        #expect(GameHeader.gameChip(number: 24301, hardCore: true, relaxed: true) == ("#24301 · HC · RX", "Game 24301, Hard Core, Relaxed"))
     }
 
     /// On short, wide boards cards are capped so a twelve-card column keeps a readable fan; a fresh

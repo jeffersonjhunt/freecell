@@ -397,3 +397,49 @@ func fillers(excluding used: [Card]) -> [Card] {
         #expect(!store.state.isRestarted && store.state.number == 617, "chosen again: a new game")
     }
 }
+
+// MARK: - Relaxed (spec "Relaxed")
+
+@MainActor @Suite struct RelaxedSwitch {
+    @Test func dealsAtOnceOnAFreshGameAndIsRemembered() {
+        let store = makeStore()
+        var remembered: [Bool] = []
+        store.rememberRelaxed = { remembered.append($0) }
+        AppUI().requestNewGame(relaxed: true, store: store)
+        #expect(store.state.isRelaxed && store.lastRelaxed && remembered == [true])
+        store.newGame()
+        #expect(store.state.isRelaxed, "New Game keeps Relaxed")
+        AppUI().requestNewGame(hardCore: true, store: store)
+        #expect(store.state.isRelaxed && store.state.isHardCore, "the two mix")
+        AppUI().requestRestart(store: store)
+        playAMove(store)
+        let ui = AppUI()
+        ui.asksBeforeEndingGame = { false }
+        ui.requestRestart(store: store)
+        #expect(store.state.isRelaxed && store.state.isRestarted, "a restart keeps it")
+    }
+
+    @Test func midGameItAsks() throws {
+        let store = makeStore()
+        let ui = AppUI()
+        playAMove(store)
+        ui.requestNewGame(relaxed: true, store: store)
+        let ask = try #require(ui.pendingNewGame)
+        #expect(ask.kicker == "RELAXED" && ask.title == "Turn on Relaxed?" && ask.confirm == "Start Relaxed")
+        #expect(ask.message.hasPrefix("Any stack in order moves at once."))
+        #expect(!store.state.isRelaxed, "nothing dealt yet")
+        ui.confirmPending(store: store)
+        #expect(store.state.isRelaxed)
+        playAMove(store)
+        ui.requestNewGame(relaxed: false, store: store)
+        #expect(ui.pendingNewGame?.title == "Turn off Relaxed?" && ui.pendingNewGame?.confirm == "Start New Game")
+    }
+
+    @Test func resumingARelaxedGameRemembersIt() {
+        let store = makeStore()
+        store.resume(from: FreeCellEngine.newGame(number: 5, relaxed: true))
+        #expect(store.lastRelaxed)
+        store.newGame()
+        #expect(store.state.isRelaxed)
+    }
+}
