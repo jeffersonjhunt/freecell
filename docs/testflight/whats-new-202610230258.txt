@@ -1,0 +1,5 @@
+New in this build:
+• A stack too long to move now says why, for example "Only 2 cards can move — 1 free cell, no empty column". FreeCell moves only as many cards at once as your free cells and empty columns could carry one by one.
+• Relaxed (Settings ▸ Game): any stack in order moves at once, an easier game. Relaxed wins are marked RX in your Top 10.
+
+Please try: tap and drag cards and stacks; let cards go home by themselves (or turn that off in Settings); tap the game number at the top to play a game by number (try 617, or 11982, the one that can't be won); Hard Core and Relaxed in Settings; Undo, Finish and the win animations; your Top 10 under More ▸ Scores. Game Center leaderboards aren't set up yet, so wins won't post there.
